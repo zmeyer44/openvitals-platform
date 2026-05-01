@@ -1,9 +1,10 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 export type ObjectStore = {
   read(objectKey: string): Promise<Buffer>;
   write(objectKey: string, bytes: Buffer): Promise<void>;
+  delete(objectKey: string): Promise<void>;
 };
 
 function resolveObjectPath(root: string, objectKey: string): string {
@@ -26,6 +27,9 @@ export function createLocalObjectStore(root: string): ObjectStore {
       const fullPath = resolveObjectPath(root, objectKey);
       await mkdir(path.dirname(fullPath), { recursive: true });
       await writeFile(fullPath, bytes);
+    },
+    async delete(objectKey) {
+      await rm(resolveObjectPath(root, objectKey), { force: true });
     }
   };
 }

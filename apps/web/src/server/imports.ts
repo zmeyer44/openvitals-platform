@@ -56,6 +56,18 @@ function getOptionalString(value: FormDataEntryValue | null): string | undefined
   return typeof value === "string" && value.trim() !== "" ? value.trim() : undefined;
 }
 
+const DEFAULT_MAX_IMPORT_FILE_BYTES = 25 * 1024 * 1024;
+const MULTIPART_OVERHEAD_BYTES = 4 * 1024;
+
+function getMaxImportFileBytes(): number {
+  const raw = process.env.OPENVITALS_MAX_IMPORT_BYTES;
+  if (!raw) {
+    return DEFAULT_MAX_IMPORT_FILE_BYTES;
+  }
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_MAX_IMPORT_FILE_BYTES;
+}
+
 export async function parseMultipartImportRequest(request: Request): Promise<{
   fileName: string;
   mimeType: string;
@@ -67,6 +79,18 @@ export async function parseMultipartImportRequest(request: Request): Promise<{
     throw new ImportApiError(415, "multipart_required", "Imports must be uploaded as multipart/form-data.");
   }
 
+  const maxBytes = getMaxImportFileBytes();
+  const contentLengthHeader = request.headers.get("content-length");
+  if (contentLengthHeader !== null) {
+    const declared = Number.parseInt(contentLengthHeader, 10);
+    if (!Number.isFinite(declared) || declared < 0) {
+      throw new ImportApiError(400, "invalid_content_length", "Content-Length header is not a valid byte count.");
+    }
+    if (declared > maxBytes + MULTIPART_OVERHEAD_BYTES) {
+      throw new ImportApiError(413, "file_too_large", `Uploads must not exceed ${maxBytes} bytes.`);
+    }
+  }
+
   const formData = await request.formData();
   const file = formData.get("file");
 
@@ -74,9 +98,16 @@ export async function parseMultipartImportRequest(request: Request): Promise<{
     throw new ImportApiError(400, "file_required", "Multipart upload requires a file field named file.");
   }
 
+  if (file.size > maxBytes) {
+    throw new ImportApiError(413, "file_too_large", `Uploads must not exceed ${maxBytes} bytes.`);
+  }
+
   const content = Buffer.from(await file.arrayBuffer());
   if (content.length === 0) {
     throw new ImportApiError(400, "empty_file", "Uploaded files must not be empty.");
+  }
+  if (content.length > maxBytes) {
+    throw new ImportApiError(413, "file_too_large", `Uploads must not exceed ${maxBytes} bytes.`);
   }
 
   return {
@@ -233,10 +264,20 @@ export async function createImport(
     if (isUniqueViolation(error, "import_jobs_idempotency_key_unique")) {
       const raced = await findExistingImportByKey(db, ownerUserId, idempotencyKey);
       if (raced) {
+        await safeDeleteObject(objectStore, objectKey);
         return { status: "deduplicated", ...raced };
       }
     }
+    await safeDeleteObject(objectStore, objectKey);
     throw error;
+  }
+}
+
+async function safeDeleteObject(objectStore: { delete(objectKey: string): Promise<void> }, objectKey: string): Promise<void> {
+  try {
+    await objectStore.delete(objectKey);
+  } catch {
+    // Best-effort: leave a reaper to mop up if delete fails (e.g. file already missing or transient I/O).
   }
 }
 

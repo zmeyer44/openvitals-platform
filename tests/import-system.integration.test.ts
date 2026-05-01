@@ -1,5 +1,5 @@
 import { Buffer } from "node:buffer";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
@@ -427,4 +427,77 @@ describeWithDatabase("import system v1 integration", () => {
       retryImport(db, { owner, importJobId: created.importJobId })
     ).rejects.toMatchObject({ status: 409, code: "import_in_flight" });
   });
+
+  it("rejects multipart uploads larger than the configured byte cap", async () => {
+    const previous = process.env.OPENVITALS_MAX_IMPORT_BYTES;
+    process.env.OPENVITALS_MAX_IMPORT_BYTES = "1024";
+
+    try {
+      const { parseMultipartImportRequest } = await import("../apps/web/src/server/imports");
+      const oversized = Buffer.alloc(2048, 0x41);
+      const formData = new FormData();
+      formData.set("file", new File([oversized], "big.csv", { type: "text/csv" }));
+
+      await expect(
+        parseMultipartImportRequest(
+          new Request("http://localhost:3000/api/imports", { method: "POST", body: formData })
+        )
+      ).rejects.toMatchObject({ status: 413, code: "file_too_large" });
+    } finally {
+      if (previous === undefined) {
+        delete process.env.OPENVITALS_MAX_IMPORT_BYTES;
+      } else {
+        process.env.OPENVITALS_MAX_IMPORT_BYTES = previous;
+      }
+    }
+  });
+
+  it("deletes the staged blob when the import transaction fails", async () => {
+    const owner = await createOwner();
+    const { createImport } = await import("../apps/web/src/server/imports");
+
+    const failingDb = new Proxy(db as object, {
+      get(target, key, receiver) {
+        if (key === "transaction") {
+          return async () => {
+            throw new Error("synthetic transaction failure");
+          };
+        }
+        return Reflect.get(target, key, receiver);
+      }
+    }) as typeof db;
+
+    await expect(
+      createImport(failingDb, {
+        owner,
+        fileName: "orphan.csv",
+        mimeType: "text/csv",
+        content: Buffer.from("test_name,value,unit\nHemoglobin,13.2,g/dL\n"),
+        idempotencyKey: "import-v1:orphan-cleanup",
+        objectStorageRoot
+      })
+    ).rejects.toThrow(/synthetic transaction failure/);
+
+    const remaining = await listFilesRecursively(join(objectStorageRoot, "users", owner.ownerUserId));
+    expect(remaining).toEqual([]);
+  });
 });
+
+async function listFilesRecursively(dir: string): Promise<string[]> {
+  let entries;
+  try {
+    entries = await readdir(dir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  const files: string[] = [];
+  for (const entry of entries) {
+    const full = join(dir, entry.name);
+    if (entry.isDirectory()) {
+      files.push(...(await listFilesRecursively(full)));
+    } else {
+      files.push(full);
+    }
+  }
+  return files;
+}
