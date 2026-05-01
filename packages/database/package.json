@@ -6,7 +6,9 @@
     ".": "./src/index.ts",
     "./schema": "./src/schema.ts",
     "./jobs": "./src/jobs.ts",
-    "./sharing": "./src/sharing.ts"
+    "./sharing": "./src/sharing.ts",
+    "./canonical": "./src/canonical.ts",
+    "./reviews": "./src/reviews.ts"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json --noEmit",

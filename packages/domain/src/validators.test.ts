@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { actorForUser, integrationActor, recipientActor, systemActor, workerActor } from "./types";
-import { buildReviewReasons, observationDraftSchema, parseNullableDecimal } from "./validators";
+import {
+  buildReviewReasons,
+  observationCorrectionSchema,
+  observationDraftSchema,
+  parseNullableDecimal,
+  reviewResolutionSchema
+} from "./validators";
 
 describe("health record validators", () => {
   it("does not fabricate a date when one is missing", () => {
@@ -28,6 +34,45 @@ describe("health record validators", () => {
         numericValue: null
       })
     ).toEqual(["low_confidence", "missing_date", "missing_numeric_value"]);
+  });
+
+  it("requires corrections payloads when the action is 'correct'", () => {
+    const missing = reviewResolutionSchema.safeParse({ action: "correct" });
+    expect(missing.success).toBe(false);
+
+    const provided = reviewResolutionSchema.safeParse({
+      action: "correct",
+      corrections: { displayName: "Hemoglobin A1c" }
+    });
+    expect(provided.success).toBe(true);
+  });
+
+  it("requires merge target id when the action is 'merge_duplicate'", () => {
+    const missing = reviewResolutionSchema.safeParse({ action: "merge_duplicate" });
+    expect(missing.success).toBe(false);
+
+    const provided = reviewResolutionSchema.safeParse({
+      action: "merge_duplicate",
+      mergeIntoResourceId: "00000000-0000-4000-8000-000000000000"
+    });
+    expect(provided.success).toBe(true);
+  });
+
+  it("rejects empty notes for 'attach_note' but accepts non-empty notes", () => {
+    const empty = reviewResolutionSchema.safeParse({ action: "attach_note" });
+    expect(empty.success).toBe(false);
+
+    const provided = reviewResolutionSchema.safeParse({
+      action: "attach_note",
+      note: "Follow up with lab"
+    });
+    expect(provided.success).toBe(true);
+  });
+
+  it("treats missing observation correction fields as no-ops", () => {
+    const result = observationCorrectionSchema.safeParse({});
+    expect(result.success).toBe(true);
+    expect(Object.keys(result.data ?? {})).toHaveLength(0);
   });
 
   it("defines actor identities for audit and provenance boundaries", () => {

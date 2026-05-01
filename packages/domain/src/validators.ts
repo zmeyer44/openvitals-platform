@@ -29,13 +29,108 @@ export const observationDraftSchema = z
 
 export type ObservationDraft = z.infer<typeof observationDraftSchema>;
 
-export const reviewResolutionSchema = z.object({
-  action: z.enum(reviewActions),
-  note: z.string().trim().max(2000).optional(),
-  correctedValue: z.record(z.string(), z.unknown()).optional()
-});
+export const reviewResolutionSchema = z
+  .object({
+    action: z.enum(reviewActions),
+    note: z.string().trim().max(2000).optional(),
+    corrections: z.record(z.string(), z.unknown()).optional(),
+    mergeIntoResourceId: z.uuid().optional()
+  })
+  .superRefine((value, ctx) => {
+    if (value.action === "correct" && (!value.corrections || Object.keys(value.corrections).length === 0)) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["corrections"],
+        message: "Corrections require at least one field to update."
+      });
+    }
+    if (value.action === "merge_duplicate" && !value.mergeIntoResourceId) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["mergeIntoResourceId"],
+        message: "Merging a duplicate requires the canonical record id to keep."
+      });
+    }
+    if (value.action === "attach_note" && (!value.note || value.note.length === 0)) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["note"],
+        message: "Attaching a note requires note text."
+      });
+    }
+  });
 
 export type ReviewResolution = z.infer<typeof reviewResolutionSchema>;
+
+export const observationCorrectionSchema = z
+  .object({
+    displayName: z.string().trim().min(1),
+    category: z.enum(recordCategories),
+    observedAt: z.coerce.date().nullable(),
+    observedAtUnknown: z.boolean(),
+    originalValue: z.string().nullable(),
+    valueNumeric: decimalLikeSchema,
+    valueText: z.string().nullable(),
+    normalizedValueNumeric: decimalLikeSchema,
+    unitOriginal: z.string().nullable(),
+    unitNormalized: z.string().nullable(),
+    referenceRangeLow: decimalLikeSchema,
+    referenceRangeHigh: decimalLikeSchema,
+    interpretation: z.string().nullable(),
+    loincCode: z.string().nullable()
+  })
+  .partial();
+
+export type ObservationCorrection = z.infer<typeof observationCorrectionSchema>;
+
+export const conditionCorrectionSchema = z
+  .object({
+    displayName: z.string().trim().min(1),
+    snomedCode: z.string().nullable(),
+    icd10Code: z.string().nullable(),
+    clinicalStatus: z.string().nullable(),
+    verificationStatus: z.string().nullable(),
+    onsetAt: z.coerce.date().nullable(),
+    abatementAt: z.coerce.date().nullable(),
+    notes: z.string().nullable()
+  })
+  .partial();
+
+export type ConditionCorrection = z.infer<typeof conditionCorrectionSchema>;
+
+export const medicationCorrectionSchema = z
+  .object({
+    displayName: z.string().trim().min(1),
+    rxnormCode: z.string().nullable(),
+    dosageText: z.string().nullable(),
+    route: z.string().nullable(),
+    frequency: z.string().nullable(),
+    startedAt: z.coerce.date().nullable(),
+    stoppedAt: z.coerce.date().nullable(),
+    active: z.boolean()
+  })
+  .partial();
+
+export type MedicationCorrection = z.infer<typeof medicationCorrectionSchema>;
+
+export const encounterCorrectionSchema = z
+  .object({
+    encounterType: z.string().nullable(),
+    providerName: z.string().nullable(),
+    facilityName: z.string().nullable(),
+    startedAt: z.coerce.date().nullable(),
+    endedAt: z.coerce.date().nullable(),
+    reason: z.string().nullable()
+  })
+  .partial();
+
+export type EncounterCorrection = z.infer<typeof encounterCorrectionSchema>;
+
+export const canonicalResourceTypes = ["observation", "condition", "medication", "encounter"] as const;
+export type CanonicalResourceType = (typeof canonicalResourceTypes)[number];
+
+export const reviewBuckets = ["trusted", "review_needed", "ignored", "unknown"] as const;
+export type ReviewBucket = (typeof reviewBuckets)[number];
 
 export function parseNullableDecimal(input: unknown): string | null {
   if (input === null || input === undefined) {

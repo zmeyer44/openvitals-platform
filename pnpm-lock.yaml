@@ -41,6 +41,9 @@ importers:
       '@openvitals/domain':
         specifier: workspace:*
         version: link:../../packages/domain
+      '@openvitals/events':
+        specifier: workspace:*
+        version: link:../../packages/events
       '@openvitals/ingestion':
         specifier: workspace:*
         version: link:../../packages/ingestion
