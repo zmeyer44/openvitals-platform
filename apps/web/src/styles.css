@@ -1,0 +1,346 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* ----------------------------------------------------------------------------
+   Design Tokens — OpenVitals
+   Refined Operator aesthetic: warm-neutral canvas, vermillion accent.
+   --------------------------------------------------------------------------*/
+
+@theme inline {
+  /* Typography */
+  --font-sans:
+    "Geist", "Geist Fallback", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+    "Segoe UI", sans-serif;
+  --font-mono:
+    "Geist Mono", "Geist Mono Fallback", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+
+  /* Radii */
+  --radius-xs: 3px;
+  --radius-sm: 5px;
+  --radius-md: 7px;
+  --radius-lg: 9px;
+  --radius-xl: 12px;
+  --radius-2xl: 16px;
+
+  /* Shadows — feathered, controlled */
+  --shadow-xs: 0 1px 0 0 rgb(15 14 12 / 0.04);
+  --shadow-sm: 0 1px 2px 0 rgb(15 14 12 / 0.05), 0 1px 0 0 rgb(15 14 12 / 0.02);
+  --shadow-md:
+    0 1px 2px 0 rgb(15 14 12 / 0.04), 0 4px 12px -2px rgb(15 14 12 / 0.06),
+    0 0 0 1px rgb(15 14 12 / 0.04);
+  --shadow-lg:
+    0 1px 2px 0 rgb(15 14 12 / 0.04), 0 12px 32px -8px rgb(15 14 12 / 0.10),
+    0 0 0 1px rgb(15 14 12 / 0.04);
+  --shadow-xl:
+    0 24px 64px -12px rgb(15 14 12 / 0.18), 0 8px 16px -8px rgb(15 14 12 / 0.06),
+    0 0 0 1px rgb(15 14 12 / 0.04);
+  --shadow-pop:
+    0 0 0 1px rgb(15 14 12 / 0.06), 0 8px 24px -8px rgb(15 14 12 / 0.12),
+    0 2px 4px -2px rgb(15 14 12 / 0.05);
+  --shadow-inset: inset 0 1px 0 0 rgb(255 255 255 / 0.6);
+
+  /* Color tokens — mapped from CSS variables below */
+  --color-canvas: var(--canvas);
+  --color-surface: var(--surface);
+  --color-surface-muted: var(--surface-muted);
+  --color-surface-strong: var(--surface-strong);
+  --color-overlay: var(--overlay);
+
+  --color-ink: var(--ink);
+  --color-ink-2: var(--ink-2);
+  --color-muted: var(--muted);
+  --color-subtle: var(--subtle);
+  --color-faint: var(--faint);
+
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-pressed: var(--accent-pressed);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent-soft: var(--accent-soft);
+  --color-accent-soft-foreground: var(--accent-soft-foreground);
+
+  --color-success: var(--success);
+  --color-success-soft: var(--success-soft);
+  --color-success-foreground: var(--success-foreground);
+
+  --color-warning: var(--warning);
+  --color-warning-soft: var(--warning-soft);
+  --color-warning-foreground: var(--warning-foreground);
+
+  --color-danger: var(--danger);
+  --color-danger-soft: var(--danger-soft);
+  --color-danger-foreground: var(--danger-foreground);
+
+  --color-info: var(--info);
+  --color-info-soft: var(--info-soft);
+  --color-info-foreground: var(--info-foreground);
+
+  /* shadcn compatibility aliases — so primitives that import from shadcn work seamlessly */
+  --color-background: var(--canvas);
+  --color-foreground: var(--ink);
+  --color-card: var(--surface);
+  --color-card-foreground: var(--ink);
+  --color-popover: var(--surface);
+  --color-popover-foreground: var(--ink);
+  --color-primary: var(--accent);
+  --color-primary-foreground: var(--accent-foreground);
+  --color-secondary: var(--surface-strong);
+  --color-secondary-foreground: var(--ink);
+  --color-muted-bg: var(--surface-muted);
+  --color-muted-foreground: var(--muted);
+  --color-accent-bg: var(--surface-strong);
+  --color-destructive: var(--danger);
+  --color-destructive-foreground: var(--danger-foreground);
+  --color-border: var(--line);
+  --color-input: var(--line);
+  --color-ring: var(--ring);
+
+  /* Chart palette — controlled, warm, with the accent leading */
+  --color-chart-1: var(--accent);
+  --color-chart-2: hsl(220 30% 28%);
+  --color-chart-3: hsl(38 70% 52%);
+  --color-chart-4: hsl(165 38% 38%);
+  --color-chart-5: hsl(260 30% 50%);
+
+  /* Animations */
+  --animate-fade-in: fade-in 0.18s ease-out;
+  --animate-slide-up: slide-up 0.22s cubic-bezier(0.32, 0.72, 0.4, 1);
+  --animate-slide-right: slide-right 0.32s cubic-bezier(0.32, 0.72, 0.4, 1);
+
+  @keyframes fade-in {
+    from {
+      opacity: 0;
+    }
+    to {
+      opacity: 1;
+    }
+  }
+  @keyframes slide-up {
+    from {
+      opacity: 0;
+      transform: translateY(4px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+  @keyframes slide-right {
+    from {
+      opacity: 0;
+      transform: translateX(8px);
+    }
+    to {
+      opacity: 1;
+      transform: translateX(0);
+    }
+  }
+}
+
+/* ----------------------------------------------------------------------------
+   Theme variables — light (default) & dark
+   --------------------------------------------------------------------------*/
+
+:root {
+  --canvas: hsl(40 8% 97.5%);
+  --surface: hsl(0 0% 100%);
+  --surface-muted: hsl(40 8% 98.5%);
+  --surface-strong: hsl(36 8% 95%);
+  --overlay: hsl(28 8% 12% / 0.42);
+
+  --ink: hsl(28 9% 9%);
+  --ink-2: hsl(28 7% 22%);
+  --muted: hsl(28 5% 42%);
+  --subtle: hsl(28 5% 60%);
+  --faint: hsl(28 5% 78%);
+
+  --line: hsl(36 9% 90%);
+  --line-strong: hsl(36 7% 82%);
+
+  --accent: #1a6ff4;
+  --accent-hover: #1561d8;
+  --accent-pressed: #1052b5;
+  --accent-foreground: #ffffff;
+  --accent-soft: #ebf3fe;
+  --accent-soft-foreground: #0d49a3;
+
+  --success: hsl(150 55% 32%);
+  --success-soft: hsl(150 50% 95%);
+  --success-foreground: hsl(150 55% 22%);
+
+  --warning: hsl(28 78% 42%);
+  --warning-soft: hsl(38 90% 94%);
+  --warning-foreground: hsl(28 78% 28%);
+
+  --danger: hsl(2 70% 46%);
+  --danger-soft: hsl(2 75% 96%);
+  --danger-foreground: hsl(2 70% 32%);
+
+  --info: hsl(218 60% 42%);
+  --info-soft: hsl(218 60% 96%);
+  --info-foreground: hsl(218 60% 28%);
+
+  --ring: #1a6ff4;
+
+  color-scheme: light;
+}
+
+.dark {
+  --canvas: hsl(28 6% 7%);
+  --surface: hsl(28 6% 10%);
+  --surface-muted: hsl(28 5% 12%);
+  --surface-strong: hsl(28 5% 16%);
+  --overlay: hsl(0 0% 0% / 0.6);
+
+  --ink: hsl(36 12% 96%);
+  --ink-2: hsl(36 6% 80%);
+  --muted: hsl(36 5% 60%);
+  --subtle: hsl(36 4% 44%);
+  --faint: hsl(36 4% 28%);
+
+  --line: hsl(28 5% 18%);
+  --line-strong: hsl(28 5% 24%);
+
+  --accent: hsl(217 91% 60%);
+  --accent-hover: hsl(217 91% 66%);
+  --accent-pressed: hsl(217 91% 54%);
+  --accent-foreground: hsl(0 0% 100%);
+  --accent-soft: hsl(217 50% 18%);
+  --accent-soft-foreground: hsl(217 91% 78%);
+
+  --success: hsl(150 50% 50%);
+  --success-soft: hsl(150 30% 16%);
+  --success-foreground: hsl(150 50% 78%);
+
+  --warning: hsl(38 78% 58%);
+  --warning-soft: hsl(38 50% 16%);
+  --warning-foreground: hsl(38 78% 78%);
+
+  --danger: hsl(2 70% 60%);
+  --danger-soft: hsl(2 50% 18%);
+  --danger-foreground: hsl(2 70% 84%);
+
+  --info: hsl(218 65% 60%);
+  --info-soft: hsl(218 50% 16%);
+  --info-foreground: hsl(218 60% 82%);
+
+  --ring: hsl(217 91% 60%);
+
+  color-scheme: dark;
+}
+
+/* ----------------------------------------------------------------------------
+   Base styles
+   --------------------------------------------------------------------------*/
+
+* {
+  border-color: var(--line);
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+}
+
+html {
+  font-feature-settings:
+    "ss01" 1,
+    "cv11" 1,
+    "calt" 1;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+body {
+  font-family: var(--font-sans);
+  background: var(--canvas);
+  color: var(--ink);
+  font-size: 14px;
+  line-height: 1.5;
+  letter-spacing: -0.005em;
+}
+
+/* Selection */
+::selection {
+  background: var(--accent-soft);
+  color: var(--accent-soft-foreground);
+}
+
+/* Scrollbar */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--line-strong);
+  border-radius: 999px;
+  border: 2px solid var(--canvas);
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--subtle);
+}
+
+/* Focus ring — bespoke, not browser default */
+:focus-visible {
+  outline: none;
+}
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible,
+[role="button"]:focus-visible,
+[role="link"]:focus-visible,
+[role="menuitem"]:focus-visible,
+[role="option"]:focus-visible,
+[role="tab"]:focus-visible,
+[role="checkbox"]:focus-visible,
+[role="radio"]:focus-visible,
+[role="switch"]:focus-visible {
+  box-shadow:
+    0 0 0 2px var(--canvas),
+    0 0 0 4px var(--ring);
+}
+
+/* Disable the awful tap highlight on iOS */
+* {
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* ----------------------------------------------------------------------------
+   Component utilities
+   --------------------------------------------------------------------------*/
+
+@utility grid-canvas {
+  background-image:
+    linear-gradient(to right, var(--line) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--line) 1px, transparent 1px);
+  background-size: 32px 32px;
+  background-position: -1px -1px;
+}
+
+@utility dotted-canvas {
+  background-image: radial-gradient(circle at 1px 1px, var(--line-strong) 1px, transparent 0);
+  background-size: 16px 16px;
+}
+
+@utility ink-gradient {
+  background: linear-gradient(180deg, var(--ink) 0%, var(--ink-2) 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+@utility tabular {
+  font-variant-numeric: tabular-nums;
+}

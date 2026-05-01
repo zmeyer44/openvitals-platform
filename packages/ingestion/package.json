@@ -1,0 +1,21 @@
+{
+  "name": "@openvitals/ingestion",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json --noEmit",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@openvitals/database": "workspace:*",
+    "@openvitals/domain": "workspace:*",
+    "@openvitals/events": "workspace:*",
+    "csv-parse": "^6.1.0",
+    "drizzle-orm": "^0.45.1",
+    "kysely": "^0.28.16"
+  }
+}

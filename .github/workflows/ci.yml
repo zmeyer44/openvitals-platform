@@ -1,0 +1,70 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  validate:
+    name: Validate
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: openvitals
+          POSTGRES_PASSWORD: openvitals
+          POSTGRES_DB: openvitals_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U openvitals -d openvitals_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgres://openvitals:openvitals@localhost:5432/openvitals_test
+      TEST_DATABASE_URL: postgres://openvitals:openvitals@localhost:5432/openvitals_test
+      BETTER_AUTH_URL: http://localhost:3000
+      BETTER_AUTH_SECRET: ci-better-auth-secret-with-enough-entropy-for-openvitals
+      OPENVITALS_OBJECT_STORAGE_ROOT: .data/blobs
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.28.2
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Migration Check
+        run: |
+          pnpm db:check
+          pnpm db:generate
+          git diff --exit-code -- packages/database/drizzle
+
+      - name: Migrate Test Database
+        run: pnpm db:migrate
+
+      - name: Test
+        run: pnpm test
+
+      - name: Build
+        run: pnpm build

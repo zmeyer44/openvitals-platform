@@ -1,0 +1,19 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: openvitals
+      POSTGRES_PASSWORD: openvitals
+      POSTGRES_DB: openvitals
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - openvitals-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U openvitals -d openvitals"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  openvitals-postgres:

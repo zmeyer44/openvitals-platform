@@ -1,0 +1,19 @@
+{
+  "name": "@openvitals/events",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json --noEmit",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@openvitals/database": "workspace:*",
+    "@openvitals/domain": "workspace:*",
+    "drizzle-orm": "^0.45.1",
+    "kysely": "^0.28.16",
+    "zod": "^4.1.12"
+  }
+}

@@ -1,0 +1,30 @@
+{
+  "name": "openvitals-platform",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.28.2",
+  "scripts": {
+    "dev": "pnpm --parallel --filter @openvitals/web --filter @openvitals/workers dev",
+    "web:dev": "pnpm --filter @openvitals/web dev",
+    "worker:dev": "pnpm --filter @openvitals/workers dev",
+    "build": "pnpm -r --sort build",
+    "typecheck": "pnpm -r --sort typecheck",
+    "test": "pnpm test:unit && pnpm test:integration",
+    "test:unit": "pnpm -r --if-present test",
+    "test:integration": "vitest run tests --no-file-parallelism",
+    "db:generate": "pnpm --filter @openvitals/database db:generate",
+    "db:check": "pnpm --filter @openvitals/database db:check",
+    "db:migrate": "pnpm --filter @openvitals/database db:migrate",
+    "db:push": "pnpm --filter @openvitals/database db:push",
+    "db:seed": "pnpm --filter @openvitals/database seed"
+  },
+  "devDependencies": {
+    "@types/node": "^25.0.0",
+    "@types/pg": "^8.15.6",
+    "drizzle-orm": "^0.45.1",
+    "pg": "^8.16.3",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.14"
+  }
+}
