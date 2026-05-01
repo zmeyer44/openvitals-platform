@@ -298,4 +298,119 @@ describeWithDatabase("import system v1 integration", () => {
     const [appUser] = await db.select().from(appUsers).where(eq(appUsers.id, owner.ownerUserId)).limit(1);
     expect(appUser?.externalAuthId).toBe("auth-import-v1-owner");
   });
+
+  it("returns the existing import when the same content is uploaded twice", async () => {
+    const owner = await createOwner();
+    const { createImport } = await import("../apps/web/src/server/imports");
+
+    const first = await createImport(db, {
+      owner,
+      fileName: "labs.csv",
+      mimeType: "text/csv",
+      content: Buffer.from("test_name,value,unit\nHemoglobin,13.2,g/dL\n"),
+      objectStorageRoot
+    });
+    expect(first.status).toBe("uploaded");
+
+    const second = await createImport(db, {
+      owner,
+      fileName: "labs.csv",
+      mimeType: "text/csv",
+      content: Buffer.from("test_name,value,unit\nHemoglobin,13.2,g/dL\n"),
+      objectStorageRoot
+    });
+
+    expect(second.status).toBe("deduplicated");
+    expect(second.importJobId).toBe(first.importJobId);
+    expect(second.sourceDocumentId).toBe(first.sourceDocumentId);
+    expect(second.objectKey).toBe(first.objectKey);
+
+    const jobs = await db
+      .select()
+      .from(importJobs)
+      .where(eq(importJobs.ownerUserId, owner.ownerUserId));
+    expect(jobs).toHaveLength(1);
+  });
+
+  it("clears prior pipeline output before requeueing a retried import", async () => {
+    const owner = await createOwner();
+    const { createImport, getImportDetail, retryImport } = await import("../apps/web/src/server/imports");
+    const { processImportJob } = await import("../packages/ingestion/src/importPipeline");
+
+    const created = await createImport(db, {
+      owner,
+      fileName: "labs-needs-review.pdf",
+      mimeType: "application/pdf",
+      content: Buffer.from("%PDF-1.4\nplaceholder"),
+      idempotencyKey: "import-v1:retry-cleanup",
+      objectStorageRoot
+    });
+
+    await processImportJob({
+      db,
+      importJobId: created.importJobId,
+      objectStore: createLocalObjectStore(objectStorageRoot),
+      workerId: "worker-import-v1"
+    });
+
+    const beforeRetry = await getImportDetail(db, { owner, importJobId: created.importJobId });
+    expect(beforeRetry?.classifications.length).toBeGreaterThan(0);
+    expect(beforeRetry?.sourceRecords.length).toBeGreaterThan(0);
+    expect(beforeRetry?.reviewTasks.length).toBeGreaterThan(0);
+
+    await db
+      .update(importJobs)
+      .set({ status: "failed", errorCode: "synthetic", completedAt: new Date() })
+      .where(eq(importJobs.id, created.importJobId));
+
+    await retryImport(db, { owner, importJobId: created.importJobId });
+
+    const afterRetry = await getImportDetail(db, { owner, importJobId: created.importJobId });
+    expect(afterRetry?.classifications).toHaveLength(0);
+    expect(afterRetry?.sourceRecords).toHaveLength(0);
+    expect(afterRetry?.reviewTasks).toHaveLength(0);
+    expect(afterRetry?.importJob.status).toBe("uploaded");
+    expect(afterRetry?.queueJob?.status).toBe("available");
+    expect(afterRetry?.history.at(-1)?.reason).toBe("manual_retry");
+
+    const reprocessed = await processImportJob({
+      db,
+      importJobId: created.importJobId,
+      objectStore: createLocalObjectStore(objectStorageRoot),
+      workerId: "worker-import-v1"
+    });
+    expect(reprocessed.status).toBe("needs_review");
+
+    const afterRerun = await getImportDetail(db, { owner, importJobId: created.importJobId });
+    expect(afterRerun?.classifications).toHaveLength(beforeRetry?.classifications.length ?? 0);
+    expect(afterRerun?.sourceRecords).toHaveLength(beforeRetry?.sourceRecords.length ?? 0);
+    expect(afterRerun?.reviewTasks).toHaveLength(beforeRetry?.reviewTasks.length ?? 0);
+  });
+
+  it("refuses to retry while the queued job is running", async () => {
+    const owner = await createOwner();
+    const { createImport, retryImport } = await import("../apps/web/src/server/imports");
+
+    const created = await createImport(db, {
+      owner,
+      fileName: "running.csv",
+      mimeType: "text/csv",
+      content: Buffer.from("test_name,value,unit\nHemoglobin,13.2,g/dL\n"),
+      idempotencyKey: "import-v1:running-guard",
+      objectStorageRoot
+    });
+
+    await db
+      .update(importJobs)
+      .set({ status: "failed", errorCode: "synthetic", completedAt: new Date() })
+      .where(eq(importJobs.id, created.importJobId));
+    await db
+      .update(jobQueue)
+      .set({ status: "running", lockedBy: "test-worker", lockedAt: new Date(), attempts: 1 })
+      .where(eq(jobQueue.idempotencyKey, `job:import.health_data:${created.importJobId}`));
+
+    await expect(
+      retryImport(db, { owner, importJobId: created.importJobId })
+    ).rejects.toMatchObject({ status: 409, code: "import_in_flight" });
+  });
 });

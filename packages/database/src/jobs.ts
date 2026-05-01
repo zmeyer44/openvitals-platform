@@ -166,6 +166,17 @@ export async function failJob(
     .where(eq(jobQueue.id, job.id));
 }
 
+export class JobRetryConflictError extends Error {
+  constructor(
+    message: string,
+    public readonly idempotencyKey: string,
+    public readonly currentStatus: QueuedJob["status"]
+  ) {
+    super(message);
+    this.name = "JobRetryConflictError";
+  }
+}
+
 export async function retryJobByIdempotencyKey(
   db: OpenVitalsDatabase,
   input: {
@@ -200,13 +211,28 @@ export async function retryJobByIdempotencyKey(
         lastError: null,
         deadLetterReason: null,
         updatedAt: now
-      }
+      },
+      setWhere: sql`${jobQueue.status} <> 'running'`
     })
     .returning();
 
-  if (!job) {
-    throw new Error("Failed to retry job");
+  if (job) {
+    return job;
   }
 
-  return job;
+  const [existing] = await db
+    .select()
+    .from(jobQueue)
+    .where(eq(jobQueue.idempotencyKey, input.idempotencyKey))
+    .limit(1);
+
+  if (existing) {
+    throw new JobRetryConflictError(
+      `Job ${input.idempotencyKey} is currently ${existing.status} and cannot be retried.`,
+      input.idempotencyKey,
+      existing.status
+    );
+  }
+
+  throw new Error("Failed to retry job");
 }

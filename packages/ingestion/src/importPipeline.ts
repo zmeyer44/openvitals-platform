@@ -9,7 +9,7 @@ import {
   type ImportJobStatus,
   type OpenVitalsDatabase
 } from "@openvitals/database";
-import { sha256Hex, workerActor } from "@openvitals/domain";
+import { sha256Hex, workerActor, type Actor } from "@openvitals/domain";
 import { enqueueOutboxEvent, writeAuditEvent } from "@openvitals/events";
 import type { HealthDataParser, ImportFile, MaterializeResult } from "./contracts";
 import type { ObjectStore } from "./objectStore";
@@ -31,6 +31,54 @@ export type ProcessImportJobResult = MaterializeResult & {
 
 const defaultParsers = [labCsvParser, pdfPlaceholderParser, imagePlaceholderParser];
 
+type StatusTransitionInput = {
+  importJobId: string;
+  sourceDocumentId: string;
+  ownerUserId: string;
+  fromStatus: ImportJobStatus;
+  toStatus: ImportJobStatus;
+  actor: Actor;
+  reason: string;
+  errorCode?: string | undefined;
+  metadata?: Record<string, unknown> | undefined;
+  jobUpdates?: Partial<typeof importJobs.$inferInsert> | undefined;
+  documentUpdates?: Partial<typeof sourceDocuments.$inferInsert> | undefined;
+};
+
+async function applyStatusTransition(db: OpenVitalsDatabase, input: StatusTransitionInput): Promise<void> {
+  const now = new Date();
+
+  await db
+    .update(importJobs)
+    .set({
+      status: input.toStatus,
+      updatedAt: now,
+      ...input.jobUpdates
+    })
+    .where(eq(importJobs.id, input.importJobId));
+
+  await db
+    .update(sourceDocuments)
+    .set({
+      status: input.toStatus,
+      updatedAt: now,
+      ...input.documentUpdates
+    })
+    .where(eq(sourceDocuments.id, input.sourceDocumentId));
+
+  await appendImportStatusHistory(db, {
+    ownerUserId: input.ownerUserId,
+    importJobId: input.importJobId,
+    sourceDocumentId: input.sourceDocumentId,
+    fromStatus: input.fromStatus,
+    toStatus: input.toStatus,
+    actor: input.actor,
+    reason: input.reason,
+    errorCode: input.errorCode,
+    metadata: input.metadata
+  });
+}
+
 async function markImportFailed(
   db: OpenVitalsDatabase,
   input: {
@@ -43,59 +91,53 @@ async function markImportFailed(
     errorMessage: string;
   }
 ): Promise<void> {
-  await db
-    .update(importJobs)
-    .set({
-      status: "failed",
+  const actor = workerActor(input.workerId);
+
+  await db.transaction(async (tx) => {
+    const txDb = tx as unknown as OpenVitalsDatabase;
+
+    await applyStatusTransition(txDb, {
+      importJobId: input.importJobId,
+      sourceDocumentId: input.sourceDocumentId,
+      ownerUserId: input.ownerUserId,
+      fromStatus: input.fromStatus,
+      toStatus: "failed",
+      actor,
+      reason: "import_failed",
       errorCode: input.errorCode,
-      errorMessage: input.errorMessage,
-      completedAt: new Date(),
-      updatedAt: new Date()
-    })
-    .where(eq(importJobs.id, input.importJobId));
+      jobUpdates: {
+        errorCode: input.errorCode,
+        errorMessage: input.errorMessage,
+        completedAt: new Date()
+      },
+      documentUpdates: {
+        completedAt: new Date()
+      }
+    });
 
-  await db
-    .update(sourceDocuments)
-    .set({
-      status: "failed",
-      completedAt: new Date(),
-      updatedAt: new Date()
-    })
-    .where(eq(sourceDocuments.id, input.sourceDocumentId));
+    await enqueueOutboxEvent(txDb, {
+      eventType: "import.failed",
+      aggregateType: "import_job",
+      aggregateId: input.importJobId,
+      ownerUserId: input.ownerUserId,
+      actor,
+      payload: {
+        sourceDocumentId: input.sourceDocumentId,
+        errorCode: input.errorCode
+      }
+    });
 
-  await appendImportStatusHistory(db, {
-    ownerUserId: input.ownerUserId,
-    importJobId: input.importJobId,
-    sourceDocumentId: input.sourceDocumentId,
-    fromStatus: input.fromStatus,
-    toStatus: "failed",
-    actor: workerActor(input.workerId),
-    reason: "import_failed",
-    errorCode: input.errorCode
-  });
-
-  await enqueueOutboxEvent(db, {
-    eventType: "import.failed",
-    aggregateType: "import_job",
-    aggregateId: input.importJobId,
-    ownerUserId: input.ownerUserId,
-    actor: { type: "worker", id: input.workerId },
-    payload: {
-      sourceDocumentId: input.sourceDocumentId,
-      errorCode: input.errorCode
-    }
-  });
-
-  await writeAuditEvent(db, {
-    action: "import.failed",
-    resourceType: "import_job",
-    resourceId: input.importJobId,
-    ownerUserId: input.ownerUserId,
-    actor: { type: "worker", id: input.workerId },
-    metadata: {
-      sourceDocumentId: input.sourceDocumentId,
-      errorCode: input.errorCode
-    }
+    await writeAuditEvent(txDb, {
+      action: "import.failed",
+      resourceType: "import_job",
+      resourceId: input.importJobId,
+      ownerUserId: input.ownerUserId,
+      actor,
+      metadata: {
+        sourceDocumentId: input.sourceDocumentId,
+        errorCode: input.errorCode
+      }
+    });
   });
 }
 
@@ -119,55 +161,7 @@ export async function processImportJob(input: ProcessImportJobInput): Promise<Pr
     throw new Error(`Source document ${job.sourceDocumentId} not found`);
   }
 
-  const importJob = job;
-  const sourceDocument = document;
   let currentStatus: ImportJobStatus = job.status;
-
-  async function transitionStatus(
-    toStatus: ImportJobStatus,
-    inputStatus: {
-      reason: string;
-      errorCode?: string | undefined;
-      metadata?: Record<string, unknown> | undefined;
-      jobUpdates?: Partial<typeof importJobs.$inferInsert> | undefined;
-      documentUpdates?: Partial<typeof sourceDocuments.$inferInsert> | undefined;
-    }
-  ): Promise<void> {
-    const fromStatus = currentStatus;
-    const now = new Date();
-
-    await input.db
-      .update(importJobs)
-      .set({
-        status: toStatus,
-        updatedAt: now,
-        ...inputStatus.jobUpdates
-      })
-      .where(eq(importJobs.id, importJob.id));
-
-    await input.db
-      .update(sourceDocuments)
-      .set({
-        status: toStatus,
-        updatedAt: now,
-        ...inputStatus.documentUpdates
-      })
-      .where(eq(sourceDocuments.id, sourceDocument.id));
-
-    await appendImportStatusHistory(input.db, {
-      ownerUserId: importJob.ownerUserId,
-      importJobId: importJob.id,
-      sourceDocumentId: sourceDocument.id,
-      fromStatus,
-      toStatus,
-      actor,
-      reason: inputStatus.reason,
-      errorCode: inputStatus.errorCode,
-      metadata: inputStatus.metadata
-    });
-
-    currentStatus = toStatus;
-  }
 
   if (!document.blobObjectId) {
     await markImportFailed(input.db, {
@@ -192,26 +186,29 @@ export async function processImportJob(input: ProcessImportJobInput): Promise<Pr
     throw new Error(`Blob object ${document.blobObjectId} not found`);
   }
 
-  await enqueueOutboxEvent(input.db, {
-    eventType: "import.started",
-    aggregateType: "import_job",
-    aggregateId: job.id,
-    ownerUserId: job.ownerUserId,
-    actor: { type: "worker", id: input.workerId },
-    payload: {
-      sourceDocumentId: document.id
-    }
-  });
+  await input.db.transaction(async (tx) => {
+    const txDb = tx as unknown as OpenVitalsDatabase;
+    await enqueueOutboxEvent(txDb, {
+      eventType: "import.started",
+      aggregateType: "import_job",
+      aggregateId: job.id,
+      ownerUserId: job.ownerUserId,
+      actor,
+      payload: {
+        sourceDocumentId: document.id
+      }
+    });
 
-  await writeAuditEvent(input.db, {
-    action: "import.started",
-    resourceType: "import_job",
-    resourceId: job.id,
-    ownerUserId: job.ownerUserId,
-    actor: { type: "worker", id: input.workerId },
-    metadata: {
-      sourceDocumentId: document.id
-    }
+    await writeAuditEvent(txDb, {
+      action: "import.started",
+      resourceType: "import_job",
+      resourceId: job.id,
+      ownerUserId: job.ownerUserId,
+      actor,
+      metadata: {
+        sourceDocumentId: document.id
+      }
+    });
   });
 
   const bytes = await input.objectStore.read(blob.objectKey);
@@ -239,105 +236,168 @@ export async function processImportJob(input: ProcessImportJobInput): Promise<Pr
   const classificationResult = await parserRegistry.classify(file);
   const selected = classificationResult.selected;
 
-  await recordFileClassifications(
-    input.db,
-    classificationResult.decisions.map((decision) => ({
-      ownerUserId: job.ownerUserId,
-      importJobId: job.id,
-      sourceDocumentId: document.id,
-      parserName: decision.parserName,
-      parserVersion: decision.parserVersion,
-      decision: decision.decision,
-      classification: decision.classification,
-      confidence: decision.confidence,
-      empty: decision.empty,
-      selected: selected === decision,
-      reason: decision.reason,
-      warnings: { items: decision.warnings },
-      metadata: {
-        supported: decision.supported,
-        reviewRequired: decision.reviewRequired
-      }
-    }))
-  );
-
   if (!selected) {
-    await transitionStatus("needs_review", {
-      reason: "unsupported_format",
-      documentUpdates: {
-        classification: "unsupported",
-        parserName: null,
-        parserVersion: null,
-        classifiedAt: new Date()
-      },
-      metadata: {
-        decisions: classificationResult.decisions.map((decision) => ({
+    await input.db.transaction(async (tx) => {
+      const txDb = tx as unknown as OpenVitalsDatabase;
+
+      await recordFileClassifications(
+        txDb,
+        classificationResult.decisions.map((decision) => ({
+          ownerUserId: job.ownerUserId,
+          importJobId: job.id,
+          sourceDocumentId: document.id,
           parserName: decision.parserName,
           parserVersion: decision.parserVersion,
           decision: decision.decision,
           classification: decision.classification,
-          confidence: decision.confidence
+          confidence: decision.confidence,
+          empty: decision.empty,
+          selected: false,
+          reason: decision.reason,
+          warnings: { items: decision.warnings },
+          metadata: {
+            supported: decision.supported,
+            reviewRequired: decision.reviewRequired
+          }
         }))
-      }
-    });
+      );
 
-    await input.db.insert(reviewTasks).values({
-      ownerUserId: job.ownerUserId,
-      resourceType: "source_document",
-      resourceId: document.id,
-      reason: "unsupported_format",
-      suggestedValue: {
-        fileName: document.fileName,
-        mimeType: document.mimeType
-      }
+      await applyStatusTransition(txDb, {
+        importJobId: job.id,
+        sourceDocumentId: document.id,
+        ownerUserId: job.ownerUserId,
+        fromStatus: currentStatus,
+        toStatus: "needs_review",
+        actor,
+        reason: "unsupported_format",
+        documentUpdates: {
+          classification: "unsupported",
+          parserName: null,
+          parserVersion: null,
+          classifiedAt: new Date()
+        },
+        metadata: {
+          decisions: classificationResult.decisions.map((decision) => ({
+            parserName: decision.parserName,
+            parserVersion: decision.parserVersion,
+            decision: decision.decision,
+            classification: decision.classification,
+            confidence: decision.confidence
+          }))
+        }
+      });
+
+      await txDb.insert(reviewTasks).values({
+        ownerUserId: job.ownerUserId,
+        resourceType: "source_document",
+        resourceId: document.id,
+        reason: "unsupported_format",
+        suggestedValue: {
+          fileName: document.fileName,
+          mimeType: document.mimeType
+        }
+      });
     });
+    currentStatus = "needs_review";
 
     return { status: "needs_review", sourceRecordCount: 0, canonicalRecordCount: 0, reviewTaskCount: 1 };
   }
 
-  const parser = selected.parser;
-  await transitionStatus("classified", {
-    reason: "parser_selected",
-    documentUpdates: {
-      classification: selected.classification,
-      parserName: selected.parserName,
-      parserVersion: selected.parserVersion,
-      classifiedAt: new Date()
-    },
-    metadata: {
-      parserName: selected.parserName,
-      parserVersion: selected.parserVersion,
-      classification: selected.classification,
-      decision: selected.decision,
-      confidence: selected.confidence
-    }
-  });
+  await input.db.transaction(async (tx) => {
+    const txDb = tx as unknown as OpenVitalsDatabase;
 
-  if (selected.empty) {
-    await transitionStatus("completed", {
-      reason: "empty_import",
-      jobUpdates: {
-        metrics: { empty: true, recordCount: 0 },
-        completedAt: new Date()
-      },
+    await recordFileClassifications(
+      txDb,
+      classificationResult.decisions.map((decision) => ({
+        ownerUserId: job.ownerUserId,
+        importJobId: job.id,
+        sourceDocumentId: document.id,
+        parserName: decision.parserName,
+        parserVersion: decision.parserVersion,
+        decision: decision.decision,
+        classification: decision.classification,
+        confidence: decision.confidence,
+        empty: decision.empty,
+        selected: selected === decision,
+        reason: decision.reason,
+        warnings: { items: decision.warnings },
+        metadata: {
+          supported: decision.supported,
+          reviewRequired: decision.reviewRequired
+        }
+      }))
+    );
+
+    await applyStatusTransition(txDb, {
+      importJobId: job.id,
+      sourceDocumentId: document.id,
+      ownerUserId: job.ownerUserId,
+      fromStatus: currentStatus,
+      toStatus: "classified",
+      actor,
+      reason: "parser_selected",
       documentUpdates: {
-        completedAt: new Date()
+        classification: selected.classification,
+        parserName: selected.parserName,
+        parserVersion: selected.parserVersion,
+        classifiedAt: new Date()
+      },
+      metadata: {
+        parserName: selected.parserName,
+        parserVersion: selected.parserVersion,
+        classification: selected.classification,
+        decision: selected.decision,
+        confidence: selected.confidence
       }
     });
+  });
+  currentStatus = "classified";
+
+  if (selected.empty) {
+    await input.db.transaction(async (tx) => {
+      await applyStatusTransition(tx as unknown as OpenVitalsDatabase, {
+        importJobId: job.id,
+        sourceDocumentId: document.id,
+        ownerUserId: job.ownerUserId,
+        fromStatus: currentStatus,
+        toStatus: "completed",
+        actor,
+        reason: "empty_import",
+        jobUpdates: {
+          metrics: { empty: true, recordCount: 0 },
+          completedAt: new Date()
+        },
+        documentUpdates: {
+          completedAt: new Date()
+        }
+      });
+    });
+    currentStatus = "completed";
 
     return { status: "completed", sourceRecordCount: 0, canonicalRecordCount: 0, reviewTaskCount: 0 };
   }
 
+  const parser = selected.parser;
   const parsed = await parser.parse(file);
-  await transitionStatus("parsed", {
-    reason: "parser_parse_completed",
-    documentUpdates: {
-      parsedAt: new Date()
-    },
-    metadata: {
-      parsedRecordCount: parsed.length
-    }
+
+  await input.db.transaction(async (tx) => {
+    await applyStatusTransition(tx as unknown as OpenVitalsDatabase, {
+      importJobId: job.id,
+      sourceDocumentId: document.id,
+      ownerUserId: job.ownerUserId,
+      fromStatus: currentStatus,
+      toStatus: "parsed",
+      actor,
+      reason: "parser_parse_completed",
+      documentUpdates: {
+        parsedAt: new Date()
+      },
+      metadata: {
+        parsedRecordCount: parsed.length
+      }
+    });
   });
+  currentStatus = "parsed";
 
   const normalized = await parser.normalize(parsed);
   if (normalized.length === 0) {
@@ -353,72 +413,93 @@ export async function processImportJob(input: ProcessImportJobInput): Promise<Pr
     return { status: "failed", sourceRecordCount: 0, canonicalRecordCount: 0, reviewTaskCount: 0 };
   }
 
-  await transitionStatus("normalized", {
-    reason: "parser_normalize_completed",
-    documentUpdates: {
-      normalizedAt: new Date()
-    },
-    metadata: {
-      normalizedRecordCount: normalized.length
-    }
+  await input.db.transaction(async (tx) => {
+    await applyStatusTransition(tx as unknown as OpenVitalsDatabase, {
+      importJobId: job.id,
+      sourceDocumentId: document.id,
+      ownerUserId: job.ownerUserId,
+      fromStatus: currentStatus,
+      toStatus: "normalized",
+      actor,
+      reason: "parser_normalize_completed",
+      documentUpdates: {
+        normalizedAt: new Date()
+      },
+      metadata: {
+        normalizedRecordCount: normalized.length
+      }
+    });
   });
+  currentStatus = "normalized";
 
-  const materialized = await parser.materialize(input.db, normalized, {
-    ownerUserId: job.ownerUserId,
-    sourceDocumentId: document.id,
-    importJobId: job.id,
-    actorId: input.workerId
-  });
+  const result = await input.db.transaction(async (tx) => {
+    const txDb = tx as unknown as OpenVitalsDatabase;
 
-  const finalStatus = materialized.reviewTaskCount > 0 ? "needs_review" : "completed";
+    const materialized = await parser.materialize(txDb, normalized, {
+      ownerUserId: job.ownerUserId,
+      sourceDocumentId: document.id,
+      importJobId: job.id,
+      actorId: input.workerId
+    });
 
-  await transitionStatus(finalStatus, {
-    reason: finalStatus === "needs_review" ? "materialized_with_review_tasks" : "materialized",
-    jobUpdates: {
-      metrics: {
+    const finalStatus: ImportJobStatus = materialized.reviewTaskCount > 0 ? "needs_review" : "completed";
+
+    await applyStatusTransition(txDb, {
+      importJobId: job.id,
+      sourceDocumentId: document.id,
+      ownerUserId: job.ownerUserId,
+      fromStatus: currentStatus,
+      toStatus: finalStatus,
+      actor,
+      reason: finalStatus === "needs_review" ? "materialized_with_review_tasks" : "materialized",
+      jobUpdates: {
+        metrics: {
+          sourceRecordCount: materialized.sourceRecordCount,
+          canonicalRecordCount: materialized.canonicalRecordCount,
+          reviewTaskCount: materialized.reviewTaskCount
+        },
+        completedAt: finalStatus === "completed" ? new Date() : null
+      },
+      documentUpdates: {
+        completedAt: finalStatus === "completed" ? new Date() : null
+      },
+      metadata: {
         sourceRecordCount: materialized.sourceRecordCount,
         canonicalRecordCount: materialized.canonicalRecordCount,
         reviewTaskCount: materialized.reviewTaskCount
-      },
-      completedAt: finalStatus === "completed" ? new Date() : null
-    },
-    documentUpdates: {
-      completedAt: finalStatus === "completed" ? new Date() : null
-    },
-    metadata: {
-      sourceRecordCount: materialized.sourceRecordCount,
-      canonicalRecordCount: materialized.canonicalRecordCount,
-      reviewTaskCount: materialized.reviewTaskCount
-    }
-  });
+      }
+    });
 
-  await enqueueOutboxEvent(input.db, {
-    eventType: "import.completed",
-    aggregateType: "import_job",
-    aggregateId: job.id,
-    ownerUserId: job.ownerUserId,
-    actor: { type: "worker", id: input.workerId },
-    payload: {
-      sourceDocumentId: document.id,
-      status: finalStatus,
-      reviewTaskCount: materialized.reviewTaskCount
-    }
-  });
+    await enqueueOutboxEvent(txDb, {
+      eventType: "import.completed",
+      aggregateType: "import_job",
+      aggregateId: job.id,
+      ownerUserId: job.ownerUserId,
+      actor,
+      payload: {
+        sourceDocumentId: document.id,
+        status: finalStatus,
+        reviewTaskCount: materialized.reviewTaskCount
+      }
+    });
 
-  await writeAuditEvent(input.db, {
-    action: "import.completed",
-    resourceType: "import_job",
-    resourceId: job.id,
-    ownerUserId: job.ownerUserId,
-    actor: { type: "worker", id: input.workerId },
-    metadata: {
-      sourceDocumentId: document.id,
-      status: finalStatus
-    }
+    await writeAuditEvent(txDb, {
+      action: "import.completed",
+      resourceType: "import_job",
+      resourceId: job.id,
+      ownerUserId: job.ownerUserId,
+      actor,
+      metadata: {
+        sourceDocumentId: document.id,
+        status: finalStatus
+      }
+    });
+
+    return { materialized, finalStatus };
   });
 
   return {
-    status: finalStatus,
-    ...materialized
+    status: result.finalStatus,
+    ...result.materialized
   };
 }

@@ -1,14 +1,20 @@
 import { Buffer } from "node:buffer";
-import { and, asc, desc, eq, inArray } from "drizzle-orm";
+import { randomUUID } from "node:crypto";
+import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import {
   appendImportStatusHistory,
   blobObjects,
+  conditions,
+  encounters,
   enqueueJob,
   fileClassifications,
   importJobs,
   importQueueIdempotencyKey,
   importStatusHistory,
+  JobRetryConflictError,
   jobQueue,
+  medications,
+  observations,
   retryJobByIdempotencyKey,
   reviewTasks,
   sourceDocuments,
@@ -30,7 +36,7 @@ export type CreateImportInput = {
 };
 
 export type CreateImportResult = {
-  status: "uploaded";
+  status: "uploaded" | "deduplicated";
   sourceDocumentId: string;
   importJobId: string;
   objectKey: string;
@@ -81,6 +87,34 @@ export async function parseMultipartImportRequest(request: Request): Promise<{
   };
 }
 
+async function findExistingImportByKey(
+  db: OpenVitalsDatabase,
+  ownerUserId: string,
+  idempotencyKey: string
+): Promise<{ sourceDocumentId: string; importJobId: string; objectKey: string } | null> {
+  const [existing] = await db
+    .select({
+      importJobId: importJobs.id,
+      sourceDocumentId: sourceDocuments.id,
+      objectKey: blobObjects.objectKey
+    })
+    .from(importJobs)
+    .innerJoin(sourceDocuments, eq(sourceDocuments.id, importJobs.sourceDocumentId))
+    .leftJoin(blobObjects, eq(blobObjects.id, sourceDocuments.blobObjectId))
+    .where(and(eq(importJobs.ownerUserId, ownerUserId), eq(importJobs.idempotencyKey, idempotencyKey)))
+    .limit(1);
+
+  if (!existing) {
+    return null;
+  }
+
+  return {
+    sourceDocumentId: existing.sourceDocumentId,
+    importJobId: existing.importJobId,
+    objectKey: existing.objectKey ?? ""
+  };
+}
+
 export async function createImport(
   db: OpenVitalsDatabase,
   input: CreateImportInput
@@ -91,99 +125,135 @@ export async function createImport(
       ? Buffer.from(input.content)
       : Buffer.from(input.content);
   const sha256 = sha256Hex(bytes);
-  const objectStore = createLocalObjectStore(input.objectStorageRoot ?? process.env.OPENVITALS_OBJECT_STORAGE_ROOT ?? ".data/blobs");
   const ownerUserId = input.owner.ownerUserId;
+  const idempotencyKey = input.idempotencyKey ?? `import:${ownerUserId}:${sha256}`;
 
-  const result = await db.transaction(async (tx) => {
-    const [sourceDocument] = await tx
-      .insert(sourceDocuments)
-      .values({
-        ownerUserId,
-        sourceKind: "file",
-        fileName: input.fileName,
-        mimeType: input.mimeType,
-        sha256,
-        status: "uploaded"
-      })
-      .returning();
+  const existing = await findExistingImportByKey(db, ownerUserId, idempotencyKey);
+  if (existing) {
+    return { status: "deduplicated", ...existing };
+  }
 
-    if (!sourceDocument) {
-      throw new Error("Failed to create source document");
-    }
-
-    const objectKey = buildSourceDocumentObjectKey({
-      ownerUserId,
-      sourceDocumentId: sourceDocument.id,
-      sha256,
-      fileName: input.fileName
-    });
-
-    await objectStore.write(objectKey, bytes);
-
-    const [blob] = await tx
-      .insert(blobObjects)
-      .values({
-        ownerUserId,
-        objectKey,
-        sha256,
-        mimeType: input.mimeType,
-        byteSize: bytes.length
-      })
-      .returning();
-
-    if (!blob) {
-      throw new Error("Failed to create blob object");
-    }
-
-    await tx.update(sourceDocuments).set({ blobObjectId: blob.id }).where(eq(sourceDocuments.id, sourceDocument.id));
-
-    const [importJob] = await tx
-      .insert(importJobs)
-      .values({
-        ownerUserId,
-        sourceDocumentId: sourceDocument.id,
-        status: "uploaded",
-        idempotencyKey: input.idempotencyKey ?? `import:${ownerUserId}:${sha256}`
-      })
-      .returning();
-
-    if (!importJob) {
-      throw new Error("Failed to create import job");
-    }
-
-    await appendImportStatusHistory(tx as unknown as OpenVitalsDatabase, {
-      ownerUserId,
-      importJobId: importJob.id,
-      sourceDocumentId: sourceDocument.id,
-      fromStatus: null,
-      toStatus: "uploaded",
-      actor: input.owner.actor,
-      reason: "file_uploaded",
-      metadata: {
-        fileName: input.fileName,
-        mimeType: input.mimeType,
-        byteSize: bytes.length,
-        sha256
-      }
-    });
-
-    await enqueueJob(tx as unknown as OpenVitalsDatabase, {
-      kind: "import.health_data",
-      payload: { importJobId: importJob.id },
-      idempotencyKey: importQueueIdempotencyKey(importJob.id)
-    });
-
-    return {
-      sourceDocumentId: sourceDocument.id,
-      importJobId: importJob.id,
-      objectKey
-    };
+  const sourceDocumentId = randomUUID();
+  const objectKey = buildSourceDocumentObjectKey({
+    ownerUserId,
+    sourceDocumentId,
+    sha256,
+    fileName: input.fileName
   });
+  const objectStore = createLocalObjectStore(
+    input.objectStorageRoot ?? process.env.OPENVITALS_OBJECT_STORAGE_ROOT ?? ".data/blobs"
+  );
 
-  return {
-    status: "uploaded",
-    ...result
-  };
+  await objectStore.write(objectKey, bytes);
+
+  try {
+    const result = await db.transaction(async (tx) => {
+      const txDb = tx as unknown as OpenVitalsDatabase;
+
+      const [sourceDocument] = await tx
+        .insert(sourceDocuments)
+        .values({
+          id: sourceDocumentId,
+          ownerUserId,
+          sourceKind: "file",
+          fileName: input.fileName,
+          mimeType: input.mimeType,
+          sha256,
+          status: "uploaded"
+        })
+        .returning();
+
+      if (!sourceDocument) {
+        throw new Error("Failed to create source document");
+      }
+
+      const [blob] = await tx
+        .insert(blobObjects)
+        .values({
+          ownerUserId,
+          objectKey,
+          sha256,
+          mimeType: input.mimeType,
+          byteSize: bytes.length
+        })
+        .returning();
+
+      if (!blob) {
+        throw new Error("Failed to create blob object");
+      }
+
+      await tx
+        .update(sourceDocuments)
+        .set({ blobObjectId: blob.id })
+        .where(eq(sourceDocuments.id, sourceDocument.id));
+
+      const [importJob] = await tx
+        .insert(importJobs)
+        .values({
+          ownerUserId,
+          sourceDocumentId: sourceDocument.id,
+          status: "uploaded",
+          idempotencyKey
+        })
+        .returning();
+
+      if (!importJob) {
+        throw new Error("Failed to create import job");
+      }
+
+      await appendImportStatusHistory(txDb, {
+        ownerUserId,
+        importJobId: importJob.id,
+        sourceDocumentId: sourceDocument.id,
+        fromStatus: null,
+        toStatus: "uploaded",
+        actor: input.owner.actor,
+        reason: "file_uploaded",
+        metadata: {
+          fileName: input.fileName,
+          mimeType: input.mimeType,
+          byteSize: bytes.length,
+          sha256
+        }
+      });
+
+      await enqueueJob(txDb, {
+        kind: "import.health_data",
+        payload: { importJobId: importJob.id },
+        idempotencyKey: importQueueIdempotencyKey(importJob.id)
+      });
+
+      return {
+        sourceDocumentId: sourceDocument.id,
+        importJobId: importJob.id,
+        objectKey
+      };
+    });
+
+    return { status: "uploaded", ...result };
+  } catch (error) {
+    if (isUniqueViolation(error, "import_jobs_idempotency_key_unique")) {
+      const raced = await findExistingImportByKey(db, ownerUserId, idempotencyKey);
+      if (raced) {
+        return { status: "deduplicated", ...raced };
+      }
+    }
+    throw error;
+  }
+}
+
+function isUniqueViolation(error: unknown, constraintName?: string): boolean {
+  if (typeof error !== "object" || error === null) {
+    return false;
+  }
+  const candidate = error as { code?: unknown; constraint?: unknown };
+  if (candidate.code !== "23505") {
+    return false;
+  }
+  if (constraintName && candidate.constraint !== constraintName) {
+    return false;
+  }
+  return true;
 }
 
 export async function listImports(
@@ -311,53 +381,107 @@ export async function retryImport(
     throw new ImportApiError(409, "import_not_retryable", "Only failed, retryable, or dead-lettered imports can be retried.");
   }
 
-  await db.transaction(async (tx) => {
-    const now = new Date();
+  if (detail.queueJob?.status === "running") {
+    throw new ImportApiError(409, "import_in_flight", "Import is currently being processed and cannot be retried.");
+  }
 
-    await tx
-      .update(importJobs)
-      .set({
-        status: "uploaded",
-        errorCode: null,
-        errorMessage: null,
-        retryAfter: null,
-        completedAt: null,
-        updatedAt: now
-      })
-      .where(eq(importJobs.id, detail.importJob.id));
+  try {
+    await db.transaction(async (tx) => {
+      const txDb = tx as unknown as OpenVitalsDatabase;
+      const now = new Date();
+      const importJobId = detail.importJob.id;
+      const sourceDocumentId = detail.sourceDocument.id;
+      const ownerUserId = input.owner.ownerUserId;
 
-    await tx
-      .update(sourceDocuments)
-      .set({
-        status: "uploaded",
-        classification: null,
-        parserName: null,
-        parserVersion: null,
-        classifiedAt: null,
-        parsedAt: null,
-        normalizedAt: null,
-        completedAt: null,
-        updatedAt: now
-      })
-      .where(eq(sourceDocuments.id, detail.sourceDocument.id));
+      const sourceRecordIdsForJob = sql`(select id from ${sourceRecords} where ${sourceRecords.importJobId} = ${importJobId} and ${sourceRecords.ownerUserId} = ${ownerUserId})`;
 
-    await appendImportStatusHistory(tx as unknown as OpenVitalsDatabase, {
-      ownerUserId: input.owner.ownerUserId,
-      importJobId: detail.importJob.id,
-      sourceDocumentId: detail.sourceDocument.id,
-      fromStatus: detail.importJob.status,
-      toStatus: "uploaded",
-      actor: input.owner.actor,
-      reason: "manual_retry"
+      for (const table of [observations, conditions, medications, encounters] as const) {
+        await tx
+          .delete(table)
+          .where(
+            and(
+              eq(table.ownerUserId, ownerUserId),
+              sql`${table.sourceRecordId} in ${sourceRecordIdsForJob}`
+            )
+          );
+      }
+
+      await tx
+        .delete(reviewTasks)
+        .where(
+          and(
+            eq(reviewTasks.ownerUserId, ownerUserId),
+            isNull(reviewTasks.sourceRecordId),
+            eq(reviewTasks.resourceType, "source_document"),
+            eq(reviewTasks.resourceId, sourceDocumentId)
+          )
+        );
+
+      await tx
+        .delete(sourceRecords)
+        .where(
+          and(eq(sourceRecords.ownerUserId, ownerUserId), eq(sourceRecords.importJobId, importJobId))
+        );
+
+      await tx
+        .delete(fileClassifications)
+        .where(
+          and(
+            eq(fileClassifications.ownerUserId, ownerUserId),
+            eq(fileClassifications.importJobId, importJobId)
+          )
+        );
+
+      await tx
+        .update(importJobs)
+        .set({
+          status: "uploaded",
+          errorCode: null,
+          errorMessage: null,
+          retryAfter: null,
+          completedAt: null,
+          updatedAt: now
+        })
+        .where(eq(importJobs.id, importJobId));
+
+      await tx
+        .update(sourceDocuments)
+        .set({
+          status: "uploaded",
+          classification: null,
+          parserName: null,
+          parserVersion: null,
+          classifiedAt: null,
+          parsedAt: null,
+          normalizedAt: null,
+          completedAt: null,
+          updatedAt: now
+        })
+        .where(eq(sourceDocuments.id, sourceDocumentId));
+
+      await appendImportStatusHistory(txDb, {
+        ownerUserId,
+        importJobId,
+        sourceDocumentId,
+        fromStatus: detail.importJob.status,
+        toStatus: "uploaded",
+        actor: input.owner.actor,
+        reason: "manual_retry"
+      });
+
+      await retryJobByIdempotencyKey(txDb, {
+        kind: "import.health_data",
+        idempotencyKey: importQueueIdempotencyKey(importJobId),
+        payload: { importJobId },
+        maxAttempts: detail.queueJob?.maxAttempts ?? detail.importJob.maxAttempts
+      });
     });
-
-    await retryJobByIdempotencyKey(tx as unknown as OpenVitalsDatabase, {
-      kind: "import.health_data",
-      idempotencyKey: importQueueIdempotencyKey(detail.importJob.id),
-      payload: { importJobId: detail.importJob.id },
-      maxAttempts: detail.queueJob?.maxAttempts ?? detail.importJob.maxAttempts
-    });
-  });
+  } catch (error) {
+    if (error instanceof JobRetryConflictError) {
+      throw new ImportApiError(409, "import_in_flight", "Import is currently being processed and cannot be retried.");
+    }
+    throw error;
+  }
 
   return getImportDetail(db, input);
 }
