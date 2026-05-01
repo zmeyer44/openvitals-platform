@@ -11,10 +11,15 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as ComponentsRouteImport } from './routes/components'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as ApiReviewTasksRouteImport } from './routes/api.review-tasks'
+import { Route as ApiRecordsRouteImport } from './routes/api.records'
 import { Route as ApiImportsRouteImport } from './routes/api.imports'
+import { Route as ApiReviewTasksReviewTaskIdRouteImport } from './routes/api.review-tasks.$reviewTaskId'
 import { Route as ApiImportsImportJobIdRouteImport } from './routes/api.imports.$importJobId'
 import { Route as ApiAuthSplatRouteImport } from './routes/api.auth.$'
+import { Route as ApiReviewTasksReviewTaskIdResolveRouteImport } from './routes/api.review-tasks.$reviewTaskId.resolve'
 import { Route as ApiImportsImportJobIdRetryRouteImport } from './routes/api.imports.$importJobId.retry'
+import { Route as ApiRecordsResourceTypeResourceIdActionRouteImport } from './routes/api.records.$resourceType.$resourceId.action'
 
 const ComponentsRoute = ComponentsRouteImport.update({
   id: '/components',
@@ -26,11 +31,27 @@ const IndexRoute = IndexRouteImport.update({
   path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiReviewTasksRoute = ApiReviewTasksRouteImport.update({
+  id: '/api/review-tasks',
+  path: '/api/review-tasks',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiRecordsRoute = ApiRecordsRouteImport.update({
+  id: '/api/records',
+  path: '/api/records',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiImportsRoute = ApiImportsRouteImport.update({
   id: '/api/imports',
   path: '/api/imports',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiReviewTasksReviewTaskIdRoute =
+  ApiReviewTasksReviewTaskIdRouteImport.update({
+    id: '/$reviewTaskId',
+    path: '/$reviewTaskId',
+    getParentRoute: () => ApiReviewTasksRoute,
+  } as any)
 const ApiImportsImportJobIdRoute = ApiImportsImportJobIdRouteImport.update({
   id: '/$importJobId',
   path: '/$importJobId',
@@ -41,37 +62,64 @@ const ApiAuthSplatRoute = ApiAuthSplatRouteImport.update({
   path: '/api/auth/$',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiReviewTasksReviewTaskIdResolveRoute =
+  ApiReviewTasksReviewTaskIdResolveRouteImport.update({
+    id: '/resolve',
+    path: '/resolve',
+    getParentRoute: () => ApiReviewTasksReviewTaskIdRoute,
+  } as any)
 const ApiImportsImportJobIdRetryRoute =
   ApiImportsImportJobIdRetryRouteImport.update({
     id: '/retry',
     path: '/retry',
     getParentRoute: () => ApiImportsImportJobIdRoute,
   } as any)
+const ApiRecordsResourceTypeResourceIdActionRoute =
+  ApiRecordsResourceTypeResourceIdActionRouteImport.update({
+    id: '/$resourceType/$resourceId/action',
+    path: '/$resourceType/$resourceId/action',
+    getParentRoute: () => ApiRecordsRoute,
+  } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/components': typeof ComponentsRoute
   '/api/imports': typeof ApiImportsRouteWithChildren
+  '/api/records': typeof ApiRecordsRouteWithChildren
+  '/api/review-tasks': typeof ApiReviewTasksRouteWithChildren
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/imports/$importJobId': typeof ApiImportsImportJobIdRouteWithChildren
+  '/api/review-tasks/$reviewTaskId': typeof ApiReviewTasksReviewTaskIdRouteWithChildren
   '/api/imports/$importJobId/retry': typeof ApiImportsImportJobIdRetryRoute
+  '/api/review-tasks/$reviewTaskId/resolve': typeof ApiReviewTasksReviewTaskIdResolveRoute
+  '/api/records/$resourceType/$resourceId/action': typeof ApiRecordsResourceTypeResourceIdActionRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/components': typeof ComponentsRoute
   '/api/imports': typeof ApiImportsRouteWithChildren
+  '/api/records': typeof ApiRecordsRouteWithChildren
+  '/api/review-tasks': typeof ApiReviewTasksRouteWithChildren
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/imports/$importJobId': typeof ApiImportsImportJobIdRouteWithChildren
+  '/api/review-tasks/$reviewTaskId': typeof ApiReviewTasksReviewTaskIdRouteWithChildren
   '/api/imports/$importJobId/retry': typeof ApiImportsImportJobIdRetryRoute
+  '/api/review-tasks/$reviewTaskId/resolve': typeof ApiReviewTasksReviewTaskIdResolveRoute
+  '/api/records/$resourceType/$resourceId/action': typeof ApiRecordsResourceTypeResourceIdActionRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/components': typeof ComponentsRoute
   '/api/imports': typeof ApiImportsRouteWithChildren
+  '/api/records': typeof ApiRecordsRouteWithChildren
+  '/api/review-tasks': typeof ApiReviewTasksRouteWithChildren
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/imports/$importJobId': typeof ApiImportsImportJobIdRouteWithChildren
+  '/api/review-tasks/$reviewTaskId': typeof ApiReviewTasksReviewTaskIdRouteWithChildren
   '/api/imports/$importJobId/retry': typeof ApiImportsImportJobIdRetryRoute
+  '/api/review-tasks/$reviewTaskId/resolve': typeof ApiReviewTasksReviewTaskIdResolveRoute
+  '/api/records/$resourceType/$resourceId/action': typeof ApiRecordsResourceTypeResourceIdActionRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -79,31 +127,48 @@ export interface FileRouteTypes {
     | '/'
     | '/components'
     | '/api/imports'
+    | '/api/records'
+    | '/api/review-tasks'
     | '/api/auth/$'
     | '/api/imports/$importJobId'
+    | '/api/review-tasks/$reviewTaskId'
     | '/api/imports/$importJobId/retry'
+    | '/api/review-tasks/$reviewTaskId/resolve'
+    | '/api/records/$resourceType/$resourceId/action'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
     | '/components'
     | '/api/imports'
+    | '/api/records'
+    | '/api/review-tasks'
     | '/api/auth/$'
     | '/api/imports/$importJobId'
+    | '/api/review-tasks/$reviewTaskId'
     | '/api/imports/$importJobId/retry'
+    | '/api/review-tasks/$reviewTaskId/resolve'
+    | '/api/records/$resourceType/$resourceId/action'
   id:
     | '__root__'
     | '/'
     | '/components'
     | '/api/imports'
+    | '/api/records'
+    | '/api/review-tasks'
     | '/api/auth/$'
     | '/api/imports/$importJobId'
+    | '/api/review-tasks/$reviewTaskId'
     | '/api/imports/$importJobId/retry'
+    | '/api/review-tasks/$reviewTaskId/resolve'
+    | '/api/records/$resourceType/$resourceId/action'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   ComponentsRoute: typeof ComponentsRoute
   ApiImportsRoute: typeof ApiImportsRouteWithChildren
+  ApiRecordsRoute: typeof ApiRecordsRouteWithChildren
+  ApiReviewTasksRoute: typeof ApiReviewTasksRouteWithChildren
   ApiAuthSplatRoute: typeof ApiAuthSplatRoute
 }
 
@@ -123,12 +188,33 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/review-tasks': {
+      id: '/api/review-tasks'
+      path: '/api/review-tasks'
+      fullPath: '/api/review-tasks'
+      preLoaderRoute: typeof ApiReviewTasksRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/records': {
+      id: '/api/records'
+      path: '/api/records'
+      fullPath: '/api/records'
+      preLoaderRoute: typeof ApiRecordsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/imports': {
       id: '/api/imports'
       path: '/api/imports'
       fullPath: '/api/imports'
       preLoaderRoute: typeof ApiImportsRouteImport
       parentRoute: typeof rootRouteImport
+    }
+    '/api/review-tasks/$reviewTaskId': {
+      id: '/api/review-tasks/$reviewTaskId'
+      path: '/$reviewTaskId'
+      fullPath: '/api/review-tasks/$reviewTaskId'
+      preLoaderRoute: typeof ApiReviewTasksReviewTaskIdRouteImport
+      parentRoute: typeof ApiReviewTasksRoute
     }
     '/api/imports/$importJobId': {
       id: '/api/imports/$importJobId'
@@ -144,12 +230,26 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiAuthSplatRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/review-tasks/$reviewTaskId/resolve': {
+      id: '/api/review-tasks/$reviewTaskId/resolve'
+      path: '/resolve'
+      fullPath: '/api/review-tasks/$reviewTaskId/resolve'
+      preLoaderRoute: typeof ApiReviewTasksReviewTaskIdResolveRouteImport
+      parentRoute: typeof ApiReviewTasksReviewTaskIdRoute
+    }
     '/api/imports/$importJobId/retry': {
       id: '/api/imports/$importJobId/retry'
       path: '/retry'
       fullPath: '/api/imports/$importJobId/retry'
       preLoaderRoute: typeof ApiImportsImportJobIdRetryRouteImport
       parentRoute: typeof ApiImportsImportJobIdRoute
+    }
+    '/api/records/$resourceType/$resourceId/action': {
+      id: '/api/records/$resourceType/$resourceId/action'
+      path: '/$resourceType/$resourceId/action'
+      fullPath: '/api/records/$resourceType/$resourceId/action'
+      preLoaderRoute: typeof ApiRecordsResourceTypeResourceIdActionRouteImport
+      parentRoute: typeof ApiRecordsRoute
     }
   }
 }
@@ -179,10 +279,52 @@ const ApiImportsRouteWithChildren = ApiImportsRoute._addFileChildren(
   ApiImportsRouteChildren,
 )
 
+interface ApiRecordsRouteChildren {
+  ApiRecordsResourceTypeResourceIdActionRoute: typeof ApiRecordsResourceTypeResourceIdActionRoute
+}
+
+const ApiRecordsRouteChildren: ApiRecordsRouteChildren = {
+  ApiRecordsResourceTypeResourceIdActionRoute:
+    ApiRecordsResourceTypeResourceIdActionRoute,
+}
+
+const ApiRecordsRouteWithChildren = ApiRecordsRoute._addFileChildren(
+  ApiRecordsRouteChildren,
+)
+
+interface ApiReviewTasksReviewTaskIdRouteChildren {
+  ApiReviewTasksReviewTaskIdResolveRoute: typeof ApiReviewTasksReviewTaskIdResolveRoute
+}
+
+const ApiReviewTasksReviewTaskIdRouteChildren: ApiReviewTasksReviewTaskIdRouteChildren =
+  {
+    ApiReviewTasksReviewTaskIdResolveRoute:
+      ApiReviewTasksReviewTaskIdResolveRoute,
+  }
+
+const ApiReviewTasksReviewTaskIdRouteWithChildren =
+  ApiReviewTasksReviewTaskIdRoute._addFileChildren(
+    ApiReviewTasksReviewTaskIdRouteChildren,
+  )
+
+interface ApiReviewTasksRouteChildren {
+  ApiReviewTasksReviewTaskIdRoute: typeof ApiReviewTasksReviewTaskIdRouteWithChildren
+}
+
+const ApiReviewTasksRouteChildren: ApiReviewTasksRouteChildren = {
+  ApiReviewTasksReviewTaskIdRoute: ApiReviewTasksReviewTaskIdRouteWithChildren,
+}
+
+const ApiReviewTasksRouteWithChildren = ApiReviewTasksRoute._addFileChildren(
+  ApiReviewTasksRouteChildren,
+)
+
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   ComponentsRoute: ComponentsRoute,
   ApiImportsRoute: ApiImportsRouteWithChildren,
+  ApiRecordsRoute: ApiRecordsRouteWithChildren,
+  ApiReviewTasksRoute: ApiReviewTasksRouteWithChildren,
   ApiAuthSplatRoute: ApiAuthSplatRoute,
 }
 export const routeTree = rootRouteImport
