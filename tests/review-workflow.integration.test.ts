@@ -71,26 +71,27 @@ async function truncateAllTables(): Promise<void> {
   await pool.query(`truncate table ${tableNames.join(", ")} restart identity cascade`);
 }
 
-async function createOwner() {
-  const externalAuthId = "test:review-owner";
+async function createOwner(input: { handle?: string } = {}) {
+  const handle = input.handle ?? "review-owner";
+  const externalAuthId = `test:${handle}`;
   await db.insert(authUsers).values({
     id: externalAuthId,
-    name: "Review Owner",
-    email: "review-owner@example.test",
+    name: handle,
+    email: `${handle}@example.test`,
     emailVerified: true
   });
 
   const [owner] = await db
     .insert(appUsers)
     .values({
-      email: "review-owner@example.test",
-      displayName: "Review Owner",
+      email: `${handle}@example.test`,
+      displayName: handle,
       externalAuthId
     })
     .returning();
 
   if (!owner) {
-    throw new Error("Failed to create review owner");
+    throw new Error(`Failed to create review owner ${handle}`);
   }
 
   return owner;
@@ -782,5 +783,56 @@ describeWithDatabase("review workflow backend integration", () => {
     expect(updatedEnc?.providerName).toBe("Dr. Lee");
     expect(updatedEnc?.facilityName).toBe("OpenVitals Clinic");
     expect(updatedEnc?.endedAt?.toISOString()).toBe(new Date("2026-01-01T09:30:00Z").toISOString());
+  });
+
+  it("isolates records by owner so cross-owner actions cannot mutate state", async () => {
+    const ownerA = await createOwner({ handle: "owner-a" });
+    const ownerB = await createOwner({ handle: "owner-b" });
+    const fixture = await createReviewableObservation({ ownerUserId: ownerA.id });
+
+    await expect(
+      applyReviewAction(db, {
+        ownerUserId: ownerB.id,
+        actor: { type: "user", id: ownerB.id },
+        reviewTaskId: fixture.missingDateTask.id,
+        action: "confirm"
+      })
+    ).rejects.toMatchObject({ code: "review_task_not_found" });
+
+    await expect(
+      applyReviewAction(db, {
+        ownerUserId: ownerB.id,
+        actor: { type: "user", id: ownerB.id },
+        resourceType: "observation",
+        resourceId: fixture.observation.id,
+        action: "confirm"
+      })
+    ).rejects.toMatchObject({ code: "resource_not_found" });
+
+    await expect(
+      applyReviewAction(db, {
+        ownerUserId: ownerB.id,
+        actor: { type: "user", id: ownerB.id },
+        reviewTaskId: fixture.missingDateTask.id,
+        action: "attach_note",
+        note: "tampering"
+      })
+    ).rejects.toMatchObject({ code: "review_task_not_found" });
+
+    const [task] = await db
+      .select()
+      .from(reviewTasks)
+      .where(eq(reviewTasks.id, fixture.missingDateTask.id))
+      .limit(1);
+    expect(task?.status).toBe("open");
+    expect(task?.resolutionNote).toBeNull();
+
+    const [observation] = await db
+      .select()
+      .from(observations)
+      .where(eq(observations.id, fixture.observation.id))
+      .limit(1);
+    expect(observation?.reviewState).toBe("needs_review");
+    expect(observation?.trustLevel).toBe("parser_extracted");
   });
 });

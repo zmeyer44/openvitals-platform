@@ -5,7 +5,7 @@ import {
   type OpenVitalsDatabase,
   type ReviewTask
 } from "@openvitals/database";
-import { reviewActions, reviewResolutionSchema } from "@openvitals/domain";
+import { canonicalResourceTypes, reviewActions, reviewResolutionSchema } from "@openvitals/domain";
 import {
   applyReviewAction,
   ReviewActionError,
@@ -96,7 +96,7 @@ export const recordActionBodySchema = reviewResolutionSchema;
 
 export type RecordActionInput = z.infer<typeof recordActionBodySchema>;
 
-export const canonicalResourceTypeSchema = z.enum(["observation", "condition", "medication", "encounter"]);
+export const canonicalResourceTypeSchema = z.enum(canonicalResourceTypes);
 
 export async function applyActionToCanonicalRecord(
   db: OpenVitalsDatabase,

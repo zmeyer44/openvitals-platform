@@ -8,10 +8,22 @@ export const Route = createFileRoute("/api/review-tasks")({
     handlers: {
       GET: async ({ request }) => {
         const owner = await requireAuthenticatedOwnerContext(request);
-        const query = listReviewTasksQuerySchema.parse(
+        const parsed = listReviewTasksQuerySchema.safeParse(
           Object.fromEntries(new URL(request.url).searchParams)
         );
-        const tasks = await listReviewTasksForOwner(db, { owner, query });
+
+        if (!parsed.success) {
+          return Response.json(
+            {
+              error: "Invalid review tasks query.",
+              code: "invalid_review_tasks_query",
+              issues: parsed.error.issues
+            },
+            { status: 400 }
+          );
+        }
+
+        const tasks = await listReviewTasksForOwner(db, { owner, query: parsed.data });
         return Response.json({ reviewTasks: tasks });
       }
     }

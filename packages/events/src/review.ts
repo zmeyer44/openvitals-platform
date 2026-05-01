@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import {
   bulkResolveReviewTasks,
   canonicalTableFor,
@@ -240,14 +240,10 @@ async function loadCanonicalRecord(
   const [record] = await db
     .select()
     .from(table)
-    .where(eq(table.id, resourceId))
+    .where(and(eq(table.id, resourceId), eq(table.ownerUserId, ownerUserId)))
     .limit(1);
 
-  if (!record || record.ownerUserId !== ownerUserId) {
-    return null;
-  }
-
-  return record as CanonicalRecord;
+  return (record as CanonicalRecord | undefined) ?? null;
 }
 
 async function persistAttachNote(
@@ -275,7 +271,12 @@ async function persistAttachNote(
   const [updated] = await db
     .update(reviewTasks)
     .set(update)
-    .where(eq(reviewTasks.id, input.reviewTask.id))
+    .where(
+      and(
+        eq(reviewTasks.id, input.reviewTask.id),
+        eq(reviewTasks.ownerUserId, input.ownerUserId)
+      )
+    )
     .returning();
 
   if (!updated) {
@@ -519,7 +520,7 @@ export async function applyReviewAction(
     const [updatedRecord] = await tx
       .update(table)
       .set(updatePayload)
-      .where(eq(table.id, resourceId))
+      .where(and(eq(table.id, resourceId), eq(table.ownerUserId, input.ownerUserId)))
       .returning();
 
     if (!updatedRecord) {
@@ -533,7 +534,7 @@ export async function applyReviewAction(
           reviewState: effect.reviewState,
           updatedAt: new Date()
         })
-        .where(eq(sourceRecords.id, sourceRecordId));
+        .where(and(eq(sourceRecords.id, sourceRecordId), eq(sourceRecords.ownerUserId, input.ownerUserId)));
     }
 
     const newValue = snapshot(updatedRecord as CanonicalRecord);
