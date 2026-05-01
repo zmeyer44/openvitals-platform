@@ -49,6 +49,8 @@ const tableNames = [
   "medications",
   "encounters",
   "source_records",
+  "file_classifications",
+  "import_status_history",
   "import_jobs",
   "source_documents",
   "blob_objects",
@@ -175,6 +177,8 @@ describeWithDatabase("OpenVitals foundation database integration", () => {
     const requiredTables = [
       "app_users",
       "source_documents",
+      "file_classifications",
+      "import_status_history",
       "source_records",
       "observations",
       "conditions",

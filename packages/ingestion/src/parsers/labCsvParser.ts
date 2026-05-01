@@ -228,6 +228,10 @@ export const labCsvParser: HealthDataParser = {
     let reviewTaskCount = 0;
 
     for (const record of records) {
+      if (record.kind !== "observation") {
+        continue;
+      }
+
       const reviewState = record.reviewReasons.length > 0 ? "needs_review" : "not_required";
       const [sourceRecord] = await db
         .insert(sourceRecords)

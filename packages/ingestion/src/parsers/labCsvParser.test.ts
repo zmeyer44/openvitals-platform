@@ -14,6 +14,11 @@ describe("labCsvParser", () => {
 
     const [record] = await labCsvParser.normalize(parsed);
 
+    expect(record?.kind).toBe("observation");
+    if (record?.kind !== "observation") {
+      throw new Error("Expected a normalized observation");
+    }
+
     expect(record?.observedAt).toBeNull();
     expect(record?.observedAtUnknown).toBe(true);
     expect(record?.reviewReasons).toContain("missing_date");
@@ -30,6 +35,11 @@ describe("labCsvParser", () => {
     });
 
     const [record] = await labCsvParser.normalize(parsed);
+
+    expect(record?.kind).toBe("observation");
+    if (record?.kind !== "observation") {
+      throw new Error("Expected a normalized observation");
+    }
 
     expect(record?.valueNumeric).toBeNull();
     expect(record?.originalValue).toBeNull();

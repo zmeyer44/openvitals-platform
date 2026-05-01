@@ -1,0 +1,301 @@
+import { Buffer } from "node:buffer";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { eq } from "drizzle-orm";
+import { Pool } from "pg";
+import { createDb, type OpenVitalsDatabase } from "../packages/database/src/client";
+import {
+  appUsers,
+  authUsers,
+  importJobs,
+  jobQueue,
+  sourceDocuments
+} from "../packages/database/src/schema";
+import { createLocalObjectStore } from "../packages/ingestion/src/objectStore";
+
+const databaseUrl = process.env.TEST_DATABASE_URL ?? process.env.DATABASE_URL;
+
+if (!databaseUrl && process.env.CI) {
+  throw new Error("TEST_DATABASE_URL or DATABASE_URL is required for import system integration tests in CI.");
+}
+
+const describeWithDatabase = databaseUrl ? describe.sequential : describe.skip;
+
+let pool: Pool;
+let db: OpenVitalsDatabase;
+let objectStorageRoot: string;
+
+const tableNames = [
+  "audit_events",
+  "outbox_events",
+  "review_tasks",
+  "record_revisions",
+  "provenance",
+  "observations",
+  "conditions",
+  "medications",
+  "encounters",
+  "source_records",
+  "file_classifications",
+  "import_status_history",
+  "import_jobs",
+  "source_documents",
+  "blob_objects",
+  "share_policy_scopes",
+  "share_policies",
+  "intake_answers",
+  "intake_workflows",
+  "integrations",
+  "integration_webhook_events",
+  "user_profiles",
+  "job_queue",
+  "app_users",
+  "auth_accounts",
+  "auth_sessions",
+  "auth_verifications",
+  "auth_users"
+];
+
+async function truncateAllTables(): Promise<void> {
+  await pool.query(`truncate table ${tableNames.join(", ")} restart identity cascade`);
+}
+
+async function createOwner() {
+  await db.insert(authUsers).values({
+    id: "auth-import-v1-owner",
+    name: "Import V1 Owner",
+    email: "import-v1-owner@example.test",
+    emailVerified: true
+  });
+
+  const { createOwnerContextForAuthUser } = await import("../apps/web/src/server/ownership");
+  return createOwnerContextForAuthUser(
+    {
+      id: "auth-import-v1-owner",
+      email: "import-v1-owner@example.test",
+      name: "Import V1 Owner"
+    },
+    db
+  );
+}
+
+describeWithDatabase("import system v1 integration", () => {
+  beforeAll(async () => {
+    process.env.DATABASE_URL = databaseUrl;
+    process.env.BETTER_AUTH_URL ??= "http://localhost:3000";
+    process.env.BETTER_AUTH_SECRET ??= "test-better-auth-secret-with-enough-entropy-for-openvitals";
+
+    pool = new Pool({ connectionString: databaseUrl, max: 1 });
+    db = createDb(pool);
+    objectStorageRoot = await mkdtemp(join(tmpdir(), "openvitals-import-v1-"));
+    await pool.query("select 1");
+  });
+
+  beforeEach(async () => {
+    await truncateAllTables();
+  });
+
+  afterAll(async () => {
+    await pool?.end();
+    if (objectStorageRoot) {
+      await rm(objectStorageRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("parses multipart uploads and records the initial visible status", async () => {
+    const owner = await createOwner();
+    const { createImport, getImportDetail, listImports, parseMultipartImportRequest } = await import("../apps/web/src/server/imports");
+    const formData = new FormData();
+    formData.set(
+      "file",
+      new File([Buffer.from("test_name,value,unit\nHemoglobin,13.2,g/dL\n")], "labs.csv", { type: "text/csv" })
+    );
+    formData.set("idempotencyKey", "import-v1:multipart-labs");
+
+    const upload = await parseMultipartImportRequest(
+      new Request("http://localhost:3000/api/imports", {
+        method: "POST",
+        body: formData
+      })
+    );
+
+    const result = await createImport(db, {
+      owner,
+      ...upload,
+      objectStorageRoot
+    });
+
+    const detail = await getImportDetail(db, { owner, importJobId: result.importJobId });
+    expect(detail?.history.map((entry) => entry.toStatus)).toEqual(["uploaded"]);
+    expect(detail?.history[0]?.reason).toBe("file_uploaded");
+    expect(detail?.sourceDocument.fileName).toBe("labs.csv");
+    expect(detail?.sourceDocument.mimeType).toBe("text/csv");
+
+    const imports = await listImports(db, { owner, status: "uploaded" });
+    expect(imports).toHaveLength(1);
+    expect(imports[0]?.queueJob?.status).toBe("available");
+  });
+
+  it.each([
+    {
+      fileName: "lab-report.pdf",
+      mimeType: "application/pdf",
+      bytes: Buffer.from("%PDF-1.4\nplaceholder"),
+      selectedParser: "openvitals.pdf_review_placeholder",
+      reason: "pdf_requires_review"
+    },
+    {
+      fileName: "lab-photo.png",
+      mimeType: "image/png",
+      bytes: Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a]),
+      selectedParser: "openvitals.image_review_placeholder",
+      reason: "image_requires_review"
+    }
+  ])("creates review-needed placeholders for $mimeType imports", async (file) => {
+    const owner = await createOwner();
+    const { createImport, getImportDetail } = await import("../apps/web/src/server/imports");
+    const { processImportJob } = await import("../packages/ingestion/src/importPipeline");
+
+    const created = await createImport(db, {
+      owner,
+      fileName: file.fileName,
+      mimeType: file.mimeType,
+      content: file.bytes,
+      idempotencyKey: `import-v1:${file.fileName}`,
+      objectStorageRoot
+    });
+
+    const result = await processImportJob({
+      db,
+      importJobId: created.importJobId,
+      objectStore: createLocalObjectStore(objectStorageRoot),
+      workerId: "worker-import-v1"
+    });
+
+    expect(result).toMatchObject({
+      status: "needs_review",
+      sourceRecordCount: 1,
+      canonicalRecordCount: 0,
+      reviewTaskCount: 1
+    });
+
+    const detail = await getImportDetail(db, { owner, importJobId: created.importJobId });
+    expect(detail?.history.map((entry) => entry.toStatus)).toEqual([
+      "uploaded",
+      "classified",
+      "parsed",
+      "normalized",
+      "needs_review"
+    ]);
+    expect(detail?.sourceDocument.status).toBe("needs_review");
+    expect(detail?.sourceRecords[0]?.recordType).toBe("unsupported");
+    expect(detail?.reviewTasks[0]?.reason).toBe(file.reason);
+
+    const selected = detail?.classifications.find((classification) => classification.selected);
+    expect(selected?.parserName).toBe(file.selectedParser);
+    expect(selected?.decision).toBe("review_needed");
+    expect(detail?.classifications.every((classification) => classification.decision !== "error")).toBe(true);
+  });
+
+  it("stores explicit unsupported parser decisions and keeps unsupported files in review", async () => {
+    const owner = await createOwner();
+    const { createImport, getImportDetail } = await import("../apps/web/src/server/imports");
+    const { processImportJob } = await import("../packages/ingestion/src/importPipeline");
+
+    const created = await createImport(db, {
+      owner,
+      fileName: "notes.txt",
+      mimeType: "text/plain",
+      content: Buffer.from("Plain notes are not a supported health import format yet."),
+      idempotencyKey: "import-v1:unsupported-text",
+      objectStorageRoot
+    });
+
+    const result = await processImportJob({
+      db,
+      importJobId: created.importJobId,
+      objectStore: createLocalObjectStore(objectStorageRoot),
+      workerId: "worker-import-v1"
+    });
+
+    expect(result).toEqual({
+      status: "needs_review",
+      sourceRecordCount: 0,
+      canonicalRecordCount: 0,
+      reviewTaskCount: 1
+    });
+
+    const detail = await getImportDetail(db, { owner, importJobId: created.importJobId });
+    expect(detail?.sourceDocument.classification).toBe("unsupported");
+    expect(detail?.history.map((entry) => entry.toStatus)).toEqual(["uploaded", "needs_review"]);
+    expect(detail?.reviewTasks[0]?.reason).toBe("unsupported_format");
+    expect(detail?.classifications).toHaveLength(3);
+    expect(detail?.classifications.every((classification) => classification.decision === "unsupported")).toBe(true);
+  });
+
+  it("surfaces and requeues failed or dead-lettered import jobs", async () => {
+    const owner = await createOwner();
+    const { createImport, getImportDetail, retryImport } = await import("../apps/web/src/server/imports");
+    const created = await createImport(db, {
+      owner,
+      fileName: "retry.csv",
+      mimeType: "text/csv",
+      content: Buffer.from("test_name,value,unit\nHemoglobin,13.2,g/dL\n"),
+      idempotencyKey: "import-v1:retry",
+      objectStorageRoot
+    });
+
+    await db
+      .update(importJobs)
+      .set({
+        status: "failed",
+        errorCode: "parser_crashed",
+        errorMessage: "Parser crashed in a retry test.",
+        completedAt: new Date()
+      })
+      .where(eq(importJobs.id, created.importJobId));
+
+    await db
+      .update(sourceDocuments)
+      .set({
+        status: "failed",
+        classification: "lab_csv",
+        parserName: "openvitals.lab_csv",
+        parserVersion: "0.1.0",
+        completedAt: new Date()
+      })
+      .where(eq(sourceDocuments.id, created.sourceDocumentId));
+
+    await db
+      .update(jobQueue)
+      .set({
+        status: "dead_letter",
+        attempts: 5,
+        lastError: "Parser crashed in a retry test.",
+        deadLetterReason: "Parser crashed in a retry test."
+      })
+      .where(eq(jobQueue.idempotencyKey, `job:import.health_data:${created.importJobId}`));
+
+    const failedDetail = await getImportDetail(db, { owner, importJobId: created.importJobId });
+    expect(failedDetail?.queueJob?.status).toBe("dead_letter");
+    expect(failedDetail?.importJob.status).toBe("failed");
+
+    const retried = await retryImport(db, {
+      owner,
+      importJobId: created.importJobId
+    });
+
+    expect(retried?.importJob.status).toBe("uploaded");
+    expect(retried?.importJob.errorCode).toBeNull();
+    expect(retried?.sourceDocument.classification).toBeNull();
+    expect(retried?.queueJob?.status).toBe("available");
+    expect(retried?.queueJob?.attempts).toBe(0);
+    expect(retried?.queueJob?.deadLetterReason).toBeNull();
+    expect(retried?.history.at(-1)?.reason).toBe("manual_retry");
+
+    const [appUser] = await db.select().from(appUsers).where(eq(appUsers.id, owner.ownerUserId)).limit(1);
+    expect(appUser?.externalAuthId).toBe("auth-import-v1-owner");
+  });
+});

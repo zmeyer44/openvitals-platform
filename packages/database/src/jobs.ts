@@ -165,3 +165,48 @@ export async function failJob(
     })
     .where(eq(jobQueue.id, job.id));
 }
+
+export async function retryJobByIdempotencyKey(
+  db: OpenVitalsDatabase,
+  input: {
+    kind: string;
+    idempotencyKey: string;
+    payload?: JsonObject;
+    runAfter?: Date;
+    maxAttempts?: number;
+  }
+): Promise<QueuedJob> {
+  const now = new Date();
+  const [job] = await db
+    .insert(jobQueue)
+    .values({
+      kind: input.kind,
+      payload: input.payload ?? {},
+      idempotencyKey: input.idempotencyKey,
+      runAfter: input.runAfter ?? now,
+      maxAttempts: input.maxAttempts ?? 5
+    })
+    .onConflictDoUpdate({
+      target: jobQueue.idempotencyKey,
+      set: {
+        kind: input.kind,
+        status: "available",
+        payload: input.payload ?? {},
+        attempts: 0,
+        maxAttempts: input.maxAttempts ?? 5,
+        runAfter: input.runAfter ?? now,
+        lockedBy: null,
+        lockedAt: null,
+        lastError: null,
+        deadLetterReason: null,
+        updatedAt: now
+      }
+    })
+    .returning();
+
+  if (!job) {
+    throw new Error("Failed to retry job");
+  }
+
+  return job;
+}

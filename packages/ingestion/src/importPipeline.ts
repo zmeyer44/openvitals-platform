@@ -1,16 +1,21 @@
 import { and, eq } from "drizzle-orm";
 import {
+  appendImportStatusHistory,
   blobObjects,
   importJobs,
+  recordFileClassifications,
   reviewTasks,
   sourceDocuments,
+  type ImportJobStatus,
   type OpenVitalsDatabase
 } from "@openvitals/database";
-import { sha256Hex } from "@openvitals/domain";
+import { sha256Hex, workerActor } from "@openvitals/domain";
 import { enqueueOutboxEvent, writeAuditEvent } from "@openvitals/events";
 import type { HealthDataParser, ImportFile, MaterializeResult } from "./contracts";
 import type { ObjectStore } from "./objectStore";
+import { createParserRegistry } from "./parserRegistry";
 import { labCsvParser } from "./parsers/labCsvParser";
+import { imagePlaceholderParser, pdfPlaceholderParser } from "./parsers/reviewPlaceholderParsers";
 
 export type ProcessImportJobInput = {
   db: OpenVitalsDatabase;
@@ -24,7 +29,7 @@ export type ProcessImportJobResult = MaterializeResult & {
   status: "completed" | "needs_review" | "failed";
 };
 
-const defaultParsers = [labCsvParser];
+const defaultParsers = [labCsvParser, pdfPlaceholderParser, imagePlaceholderParser];
 
 async function markImportFailed(
   db: OpenVitalsDatabase,
@@ -33,6 +38,7 @@ async function markImportFailed(
     sourceDocumentId: string;
     ownerUserId: string;
     workerId: string;
+    fromStatus: ImportJobStatus;
     errorCode: string;
     errorMessage: string;
   }
@@ -56,6 +62,17 @@ async function markImportFailed(
       updatedAt: new Date()
     })
     .where(eq(sourceDocuments.id, input.sourceDocumentId));
+
+  await appendImportStatusHistory(db, {
+    ownerUserId: input.ownerUserId,
+    importJobId: input.importJobId,
+    sourceDocumentId: input.sourceDocumentId,
+    fromStatus: input.fromStatus,
+    toStatus: "failed",
+    actor: workerActor(input.workerId),
+    reason: "import_failed",
+    errorCode: input.errorCode
+  });
 
   await enqueueOutboxEvent(db, {
     eventType: "import.failed",
@@ -84,6 +101,8 @@ async function markImportFailed(
 
 export async function processImportJob(input: ProcessImportJobInput): Promise<ProcessImportJobResult> {
   const parsers = input.parsers ?? defaultParsers;
+  const parserRegistry = createParserRegistry(parsers);
+  const actor = workerActor(input.workerId);
   const [job] = await input.db.select().from(importJobs).where(eq(importJobs.id, input.importJobId)).limit(1);
 
   if (!job) {
@@ -100,12 +119,63 @@ export async function processImportJob(input: ProcessImportJobInput): Promise<Pr
     throw new Error(`Source document ${job.sourceDocumentId} not found`);
   }
 
+  const importJob = job;
+  const sourceDocument = document;
+  let currentStatus: ImportJobStatus = job.status;
+
+  async function transitionStatus(
+    toStatus: ImportJobStatus,
+    inputStatus: {
+      reason: string;
+      errorCode?: string | undefined;
+      metadata?: Record<string, unknown> | undefined;
+      jobUpdates?: Partial<typeof importJobs.$inferInsert> | undefined;
+      documentUpdates?: Partial<typeof sourceDocuments.$inferInsert> | undefined;
+    }
+  ): Promise<void> {
+    const fromStatus = currentStatus;
+    const now = new Date();
+
+    await input.db
+      .update(importJobs)
+      .set({
+        status: toStatus,
+        updatedAt: now,
+        ...inputStatus.jobUpdates
+      })
+      .where(eq(importJobs.id, importJob.id));
+
+    await input.db
+      .update(sourceDocuments)
+      .set({
+        status: toStatus,
+        updatedAt: now,
+        ...inputStatus.documentUpdates
+      })
+      .where(eq(sourceDocuments.id, sourceDocument.id));
+
+    await appendImportStatusHistory(input.db, {
+      ownerUserId: importJob.ownerUserId,
+      importJobId: importJob.id,
+      sourceDocumentId: sourceDocument.id,
+      fromStatus,
+      toStatus,
+      actor,
+      reason: inputStatus.reason,
+      errorCode: inputStatus.errorCode,
+      metadata: inputStatus.metadata
+    });
+
+    currentStatus = toStatus;
+  }
+
   if (!document.blobObjectId) {
     await markImportFailed(input.db, {
       importJobId: job.id,
       sourceDocumentId: document.id,
       ownerUserId: job.ownerUserId,
       workerId: input.workerId,
+      fromStatus: currentStatus,
       errorCode: "missing_blob",
       errorMessage: "Source document has no blob object."
     });
@@ -152,6 +222,7 @@ export async function processImportJob(input: ProcessImportJobInput): Promise<Pr
       sourceDocumentId: document.id,
       ownerUserId: job.ownerUserId,
       workerId: input.workerId,
+      fromStatus: currentStatus,
       errorCode: "blob_hash_mismatch",
       errorMessage: "Blob content hash did not match the source document record."
     });
@@ -165,25 +236,50 @@ export async function processImportJob(input: ProcessImportJobInput): Promise<Pr
     sha256
   };
 
-  const classifications = await Promise.all(parsers.map(async (parser) => [parser, await parser.classify(file)] as const));
-  const selected = classifications
-    .filter(([, classification]) => classification.supported)
-    .sort(([, a], [, b]) => b.confidence - a.confidence)[0];
+  const classificationResult = await parserRegistry.classify(file);
+  const selected = classificationResult.selected;
+
+  await recordFileClassifications(
+    input.db,
+    classificationResult.decisions.map((decision) => ({
+      ownerUserId: job.ownerUserId,
+      importJobId: job.id,
+      sourceDocumentId: document.id,
+      parserName: decision.parserName,
+      parserVersion: decision.parserVersion,
+      decision: decision.decision,
+      classification: decision.classification,
+      confidence: decision.confidence,
+      empty: decision.empty,
+      selected: selected === decision,
+      reason: decision.reason,
+      warnings: { items: decision.warnings },
+      metadata: {
+        supported: decision.supported,
+        reviewRequired: decision.reviewRequired
+      }
+    }))
+  );
 
   if (!selected) {
-    await input.db
-      .update(importJobs)
-      .set({ status: "needs_review", updatedAt: new Date() })
-      .where(eq(importJobs.id, job.id));
-
-    await input.db
-      .update(sourceDocuments)
-      .set({
-        status: "needs_review",
+    await transitionStatus("needs_review", {
+      reason: "unsupported_format",
+      documentUpdates: {
         classification: "unsupported",
-        updatedAt: new Date()
-      })
-      .where(eq(sourceDocuments.id, document.id));
+        parserName: null,
+        parserVersion: null,
+        classifiedAt: new Date()
+      },
+      metadata: {
+        decisions: classificationResult.decisions.map((decision) => ({
+          parserName: decision.parserName,
+          parserVersion: decision.parserVersion,
+          decision: decision.decision,
+          classification: decision.classification,
+          confidence: decision.confidence
+        }))
+      }
+    });
 
     await input.db.insert(reviewTasks).values({
       ownerUserId: job.ownerUserId,
@@ -199,57 +295,49 @@ export async function processImportJob(input: ProcessImportJobInput): Promise<Pr
     return { status: "needs_review", sourceRecordCount: 0, canonicalRecordCount: 0, reviewTaskCount: 1 };
   }
 
-  const [parser, classification] = selected;
-  await input.db
-    .update(importJobs)
-    .set({ status: "classified", updatedAt: new Date() })
-    .where(eq(importJobs.id, job.id));
+  const parser = selected.parser;
+  await transitionStatus("classified", {
+    reason: "parser_selected",
+    documentUpdates: {
+      classification: selected.classification,
+      parserName: selected.parserName,
+      parserVersion: selected.parserVersion,
+      classifiedAt: new Date()
+    },
+    metadata: {
+      parserName: selected.parserName,
+      parserVersion: selected.parserVersion,
+      classification: selected.classification,
+      decision: selected.decision,
+      confidence: selected.confidence
+    }
+  });
 
-  await input.db
-    .update(sourceDocuments)
-    .set({
-      status: "classified",
-      classification: classification.classification,
-      parserName: parser.name,
-      parserVersion: parser.version,
-      classifiedAt: new Date(),
-      updatedAt: new Date()
-    })
-    .where(eq(sourceDocuments.id, document.id));
-
-  if (classification.empty) {
-    await input.db
-      .update(importJobs)
-      .set({
-        status: "completed",
+  if (selected.empty) {
+    await transitionStatus("completed", {
+      reason: "empty_import",
+      jobUpdates: {
         metrics: { empty: true, recordCount: 0 },
-        completedAt: new Date(),
-        updatedAt: new Date()
-      })
-      .where(eq(importJobs.id, job.id));
-
-    await input.db
-      .update(sourceDocuments)
-      .set({
-        status: "completed",
-        completedAt: new Date(),
-        updatedAt: new Date()
-      })
-      .where(eq(sourceDocuments.id, document.id));
+        completedAt: new Date()
+      },
+      documentUpdates: {
+        completedAt: new Date()
+      }
+    });
 
     return { status: "completed", sourceRecordCount: 0, canonicalRecordCount: 0, reviewTaskCount: 0 };
   }
 
   const parsed = await parser.parse(file);
-  await input.db
-    .update(importJobs)
-    .set({ status: "parsed", updatedAt: new Date() })
-    .where(eq(importJobs.id, job.id));
-
-  await input.db
-    .update(sourceDocuments)
-    .set({ status: "parsed", parsedAt: new Date(), updatedAt: new Date() })
-    .where(eq(sourceDocuments.id, document.id));
+  await transitionStatus("parsed", {
+    reason: "parser_parse_completed",
+    documentUpdates: {
+      parsedAt: new Date()
+    },
+    metadata: {
+      parsedRecordCount: parsed.length
+    }
+  });
 
   const normalized = await parser.normalize(parsed);
   if (normalized.length === 0) {
@@ -258,21 +346,22 @@ export async function processImportJob(input: ProcessImportJobInput): Promise<Pr
       sourceDocumentId: document.id,
       ownerUserId: job.ownerUserId,
       workerId: input.workerId,
+      fromStatus: currentStatus,
       errorCode: "zero_records_not_empty",
       errorMessage: "Parser returned zero records without classifying the import as empty."
     });
     return { status: "failed", sourceRecordCount: 0, canonicalRecordCount: 0, reviewTaskCount: 0 };
   }
 
-  await input.db
-    .update(importJobs)
-    .set({ status: "normalized", updatedAt: new Date() })
-    .where(eq(importJobs.id, job.id));
-
-  await input.db
-    .update(sourceDocuments)
-    .set({ status: "normalized", normalizedAt: new Date(), updatedAt: new Date() })
-    .where(eq(sourceDocuments.id, document.id));
+  await transitionStatus("normalized", {
+    reason: "parser_normalize_completed",
+    documentUpdates: {
+      normalizedAt: new Date()
+    },
+    metadata: {
+      normalizedRecordCount: normalized.length
+    }
+  });
 
   const materialized = await parser.materialize(input.db, normalized, {
     ownerUserId: job.ownerUserId,
@@ -283,28 +372,25 @@ export async function processImportJob(input: ProcessImportJobInput): Promise<Pr
 
   const finalStatus = materialized.reviewTaskCount > 0 ? "needs_review" : "completed";
 
-  await input.db
-    .update(importJobs)
-    .set({
-      status: finalStatus,
+  await transitionStatus(finalStatus, {
+    reason: finalStatus === "needs_review" ? "materialized_with_review_tasks" : "materialized",
+    jobUpdates: {
       metrics: {
         sourceRecordCount: materialized.sourceRecordCount,
         canonicalRecordCount: materialized.canonicalRecordCount,
         reviewTaskCount: materialized.reviewTaskCount
       },
-      completedAt: finalStatus === "completed" ? new Date() : null,
-      updatedAt: new Date()
-    })
-    .where(eq(importJobs.id, job.id));
-
-  await input.db
-    .update(sourceDocuments)
-    .set({
-      status: finalStatus,
-      completedAt: finalStatus === "completed" ? new Date() : null,
-      updatedAt: new Date()
-    })
-    .where(eq(sourceDocuments.id, document.id));
+      completedAt: finalStatus === "completed" ? new Date() : null
+    },
+    documentUpdates: {
+      completedAt: finalStatus === "completed" ? new Date() : null
+    },
+    metadata: {
+      sourceRecordCount: materialized.sourceRecordCount,
+      canonicalRecordCount: materialized.canonicalRecordCount,
+      reviewTaskCount: materialized.reviewTaskCount
+    }
+  });
 
   await enqueueOutboxEvent(input.db, {
     eventType: "import.completed",
