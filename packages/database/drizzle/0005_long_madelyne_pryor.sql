@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX "intake_workflows_one_active_per_owner" ON "intake_workflows" USING btree ("owner_user_id") WHERE "intake_workflows"."status" = 'in_progress';

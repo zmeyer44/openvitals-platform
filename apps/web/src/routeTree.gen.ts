@@ -11,13 +11,21 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as ComponentsRouteImport } from './routes/components'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as ApiSharesRouteImport } from './routes/api.shares'
 import { Route as ApiReviewTasksRouteImport } from './routes/api.review-tasks'
 import { Route as ApiRecordsRouteImport } from './routes/api.records'
+import { Route as ApiIntakeRouteImport } from './routes/api.intake'
 import { Route as ApiImportsRouteImport } from './routes/api.imports'
 import { Route as ApiReviewTasksReviewTaskIdRouteImport } from './routes/api.review-tasks.$reviewTaskId'
+import { Route as ApiIntakeIntakeIdRouteImport } from './routes/api.intake.$intakeId'
 import { Route as ApiImportsImportJobIdRouteImport } from './routes/api.imports.$importJobId'
 import { Route as ApiAuthSplatRouteImport } from './routes/api.auth.$'
+import { Route as ApiSharesSharePolicyIdRevokeRouteImport } from './routes/api.shares.$sharePolicyId.revoke'
+import { Route as ApiSharedSharePolicyIdObservationsRouteImport } from './routes/api.shared.$sharePolicyId.observations'
 import { Route as ApiReviewTasksReviewTaskIdResolveRouteImport } from './routes/api.review-tasks.$reviewTaskId.resolve'
+import { Route as ApiIntakeIntakeIdStepsRouteImport } from './routes/api.intake.$intakeId.steps'
+import { Route as ApiIntakeIntakeIdSkipRouteImport } from './routes/api.intake.$intakeId.skip'
+import { Route as ApiIntakeIntakeIdCompleteRouteImport } from './routes/api.intake.$intakeId.complete'
 import { Route as ApiImportsImportJobIdRetryRouteImport } from './routes/api.imports.$importJobId.retry'
 import { Route as ApiRecordsResourceTypeResourceIdActionRouteImport } from './routes/api.records.$resourceType.$resourceId.action'
 
@@ -31,6 +39,11 @@ const IndexRoute = IndexRouteImport.update({
   path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiSharesRoute = ApiSharesRouteImport.update({
+  id: '/api/shares',
+  path: '/api/shares',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiReviewTasksRoute = ApiReviewTasksRouteImport.update({
   id: '/api/review-tasks',
   path: '/api/review-tasks',
@@ -39,6 +52,11 @@ const ApiReviewTasksRoute = ApiReviewTasksRouteImport.update({
 const ApiRecordsRoute = ApiRecordsRouteImport.update({
   id: '/api/records',
   path: '/api/records',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiIntakeRoute = ApiIntakeRouteImport.update({
+  id: '/api/intake',
+  path: '/api/intake',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiImportsRoute = ApiImportsRouteImport.update({
@@ -52,6 +70,11 @@ const ApiReviewTasksReviewTaskIdRoute =
     path: '/$reviewTaskId',
     getParentRoute: () => ApiReviewTasksRoute,
   } as any)
+const ApiIntakeIntakeIdRoute = ApiIntakeIntakeIdRouteImport.update({
+  id: '/$intakeId',
+  path: '/$intakeId',
+  getParentRoute: () => ApiIntakeRoute,
+} as any)
 const ApiImportsImportJobIdRoute = ApiImportsImportJobIdRouteImport.update({
   id: '/$importJobId',
   path: '/$importJobId',
@@ -62,11 +85,39 @@ const ApiAuthSplatRoute = ApiAuthSplatRouteImport.update({
   path: '/api/auth/$',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiSharesSharePolicyIdRevokeRoute =
+  ApiSharesSharePolicyIdRevokeRouteImport.update({
+    id: '/$sharePolicyId/revoke',
+    path: '/$sharePolicyId/revoke',
+    getParentRoute: () => ApiSharesRoute,
+  } as any)
+const ApiSharedSharePolicyIdObservationsRoute =
+  ApiSharedSharePolicyIdObservationsRouteImport.update({
+    id: '/api/shared/$sharePolicyId/observations',
+    path: '/api/shared/$sharePolicyId/observations',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const ApiReviewTasksReviewTaskIdResolveRoute =
   ApiReviewTasksReviewTaskIdResolveRouteImport.update({
     id: '/resolve',
     path: '/resolve',
     getParentRoute: () => ApiReviewTasksReviewTaskIdRoute,
+  } as any)
+const ApiIntakeIntakeIdStepsRoute = ApiIntakeIntakeIdStepsRouteImport.update({
+  id: '/steps',
+  path: '/steps',
+  getParentRoute: () => ApiIntakeIntakeIdRoute,
+} as any)
+const ApiIntakeIntakeIdSkipRoute = ApiIntakeIntakeIdSkipRouteImport.update({
+  id: '/skip',
+  path: '/skip',
+  getParentRoute: () => ApiIntakeIntakeIdRoute,
+} as any)
+const ApiIntakeIntakeIdCompleteRoute =
+  ApiIntakeIntakeIdCompleteRouteImport.update({
+    id: '/complete',
+    path: '/complete',
+    getParentRoute: () => ApiIntakeIntakeIdRoute,
   } as any)
 const ApiImportsImportJobIdRetryRoute =
   ApiImportsImportJobIdRetryRouteImport.update({
@@ -85,26 +136,42 @@ export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/components': typeof ComponentsRoute
   '/api/imports': typeof ApiImportsRouteWithChildren
+  '/api/intake': typeof ApiIntakeRouteWithChildren
   '/api/records': typeof ApiRecordsRouteWithChildren
   '/api/review-tasks': typeof ApiReviewTasksRouteWithChildren
+  '/api/shares': typeof ApiSharesRouteWithChildren
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/imports/$importJobId': typeof ApiImportsImportJobIdRouteWithChildren
+  '/api/intake/$intakeId': typeof ApiIntakeIntakeIdRouteWithChildren
   '/api/review-tasks/$reviewTaskId': typeof ApiReviewTasksReviewTaskIdRouteWithChildren
   '/api/imports/$importJobId/retry': typeof ApiImportsImportJobIdRetryRoute
+  '/api/intake/$intakeId/complete': typeof ApiIntakeIntakeIdCompleteRoute
+  '/api/intake/$intakeId/skip': typeof ApiIntakeIntakeIdSkipRoute
+  '/api/intake/$intakeId/steps': typeof ApiIntakeIntakeIdStepsRoute
   '/api/review-tasks/$reviewTaskId/resolve': typeof ApiReviewTasksReviewTaskIdResolveRoute
+  '/api/shared/$sharePolicyId/observations': typeof ApiSharedSharePolicyIdObservationsRoute
+  '/api/shares/$sharePolicyId/revoke': typeof ApiSharesSharePolicyIdRevokeRoute
   '/api/records/$resourceType/$resourceId/action': typeof ApiRecordsResourceTypeResourceIdActionRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/components': typeof ComponentsRoute
   '/api/imports': typeof ApiImportsRouteWithChildren
+  '/api/intake': typeof ApiIntakeRouteWithChildren
   '/api/records': typeof ApiRecordsRouteWithChildren
   '/api/review-tasks': typeof ApiReviewTasksRouteWithChildren
+  '/api/shares': typeof ApiSharesRouteWithChildren
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/imports/$importJobId': typeof ApiImportsImportJobIdRouteWithChildren
+  '/api/intake/$intakeId': typeof ApiIntakeIntakeIdRouteWithChildren
   '/api/review-tasks/$reviewTaskId': typeof ApiReviewTasksReviewTaskIdRouteWithChildren
   '/api/imports/$importJobId/retry': typeof ApiImportsImportJobIdRetryRoute
+  '/api/intake/$intakeId/complete': typeof ApiIntakeIntakeIdCompleteRoute
+  '/api/intake/$intakeId/skip': typeof ApiIntakeIntakeIdSkipRoute
+  '/api/intake/$intakeId/steps': typeof ApiIntakeIntakeIdStepsRoute
   '/api/review-tasks/$reviewTaskId/resolve': typeof ApiReviewTasksReviewTaskIdResolveRoute
+  '/api/shared/$sharePolicyId/observations': typeof ApiSharedSharePolicyIdObservationsRoute
+  '/api/shares/$sharePolicyId/revoke': typeof ApiSharesSharePolicyIdRevokeRoute
   '/api/records/$resourceType/$resourceId/action': typeof ApiRecordsResourceTypeResourceIdActionRoute
 }
 export interface FileRoutesById {
@@ -112,13 +179,21 @@ export interface FileRoutesById {
   '/': typeof IndexRoute
   '/components': typeof ComponentsRoute
   '/api/imports': typeof ApiImportsRouteWithChildren
+  '/api/intake': typeof ApiIntakeRouteWithChildren
   '/api/records': typeof ApiRecordsRouteWithChildren
   '/api/review-tasks': typeof ApiReviewTasksRouteWithChildren
+  '/api/shares': typeof ApiSharesRouteWithChildren
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/imports/$importJobId': typeof ApiImportsImportJobIdRouteWithChildren
+  '/api/intake/$intakeId': typeof ApiIntakeIntakeIdRouteWithChildren
   '/api/review-tasks/$reviewTaskId': typeof ApiReviewTasksReviewTaskIdRouteWithChildren
   '/api/imports/$importJobId/retry': typeof ApiImportsImportJobIdRetryRoute
+  '/api/intake/$intakeId/complete': typeof ApiIntakeIntakeIdCompleteRoute
+  '/api/intake/$intakeId/skip': typeof ApiIntakeIntakeIdSkipRoute
+  '/api/intake/$intakeId/steps': typeof ApiIntakeIntakeIdStepsRoute
   '/api/review-tasks/$reviewTaskId/resolve': typeof ApiReviewTasksReviewTaskIdResolveRoute
+  '/api/shared/$sharePolicyId/observations': typeof ApiSharedSharePolicyIdObservationsRoute
+  '/api/shares/$sharePolicyId/revoke': typeof ApiSharesSharePolicyIdRevokeRoute
   '/api/records/$resourceType/$resourceId/action': typeof ApiRecordsResourceTypeResourceIdActionRoute
 }
 export interface FileRouteTypes {
@@ -127,39 +202,63 @@ export interface FileRouteTypes {
     | '/'
     | '/components'
     | '/api/imports'
+    | '/api/intake'
     | '/api/records'
     | '/api/review-tasks'
+    | '/api/shares'
     | '/api/auth/$'
     | '/api/imports/$importJobId'
+    | '/api/intake/$intakeId'
     | '/api/review-tasks/$reviewTaskId'
     | '/api/imports/$importJobId/retry'
+    | '/api/intake/$intakeId/complete'
+    | '/api/intake/$intakeId/skip'
+    | '/api/intake/$intakeId/steps'
     | '/api/review-tasks/$reviewTaskId/resolve'
+    | '/api/shared/$sharePolicyId/observations'
+    | '/api/shares/$sharePolicyId/revoke'
     | '/api/records/$resourceType/$resourceId/action'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
     | '/components'
     | '/api/imports'
+    | '/api/intake'
     | '/api/records'
     | '/api/review-tasks'
+    | '/api/shares'
     | '/api/auth/$'
     | '/api/imports/$importJobId'
+    | '/api/intake/$intakeId'
     | '/api/review-tasks/$reviewTaskId'
     | '/api/imports/$importJobId/retry'
+    | '/api/intake/$intakeId/complete'
+    | '/api/intake/$intakeId/skip'
+    | '/api/intake/$intakeId/steps'
     | '/api/review-tasks/$reviewTaskId/resolve'
+    | '/api/shared/$sharePolicyId/observations'
+    | '/api/shares/$sharePolicyId/revoke'
     | '/api/records/$resourceType/$resourceId/action'
   id:
     | '__root__'
     | '/'
     | '/components'
     | '/api/imports'
+    | '/api/intake'
     | '/api/records'
     | '/api/review-tasks'
+    | '/api/shares'
     | '/api/auth/$'
     | '/api/imports/$importJobId'
+    | '/api/intake/$intakeId'
     | '/api/review-tasks/$reviewTaskId'
     | '/api/imports/$importJobId/retry'
+    | '/api/intake/$intakeId/complete'
+    | '/api/intake/$intakeId/skip'
+    | '/api/intake/$intakeId/steps'
     | '/api/review-tasks/$reviewTaskId/resolve'
+    | '/api/shared/$sharePolicyId/observations'
+    | '/api/shares/$sharePolicyId/revoke'
     | '/api/records/$resourceType/$resourceId/action'
   fileRoutesById: FileRoutesById
 }
@@ -167,9 +266,12 @@ export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   ComponentsRoute: typeof ComponentsRoute
   ApiImportsRoute: typeof ApiImportsRouteWithChildren
+  ApiIntakeRoute: typeof ApiIntakeRouteWithChildren
   ApiRecordsRoute: typeof ApiRecordsRouteWithChildren
   ApiReviewTasksRoute: typeof ApiReviewTasksRouteWithChildren
+  ApiSharesRoute: typeof ApiSharesRouteWithChildren
   ApiAuthSplatRoute: typeof ApiAuthSplatRoute
+  ApiSharedSharePolicyIdObservationsRoute: typeof ApiSharedSharePolicyIdObservationsRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -188,6 +290,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/shares': {
+      id: '/api/shares'
+      path: '/api/shares'
+      fullPath: '/api/shares'
+      preLoaderRoute: typeof ApiSharesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/review-tasks': {
       id: '/api/review-tasks'
       path: '/api/review-tasks'
@@ -200,6 +309,13 @@ declare module '@tanstack/react-router' {
       path: '/api/records'
       fullPath: '/api/records'
       preLoaderRoute: typeof ApiRecordsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/intake': {
+      id: '/api/intake'
+      path: '/api/intake'
+      fullPath: '/api/intake'
+      preLoaderRoute: typeof ApiIntakeRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/imports': {
@@ -216,6 +332,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiReviewTasksReviewTaskIdRouteImport
       parentRoute: typeof ApiReviewTasksRoute
     }
+    '/api/intake/$intakeId': {
+      id: '/api/intake/$intakeId'
+      path: '/$intakeId'
+      fullPath: '/api/intake/$intakeId'
+      preLoaderRoute: typeof ApiIntakeIntakeIdRouteImport
+      parentRoute: typeof ApiIntakeRoute
+    }
     '/api/imports/$importJobId': {
       id: '/api/imports/$importJobId'
       path: '/$importJobId'
@@ -230,12 +353,47 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiAuthSplatRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/shares/$sharePolicyId/revoke': {
+      id: '/api/shares/$sharePolicyId/revoke'
+      path: '/$sharePolicyId/revoke'
+      fullPath: '/api/shares/$sharePolicyId/revoke'
+      preLoaderRoute: typeof ApiSharesSharePolicyIdRevokeRouteImport
+      parentRoute: typeof ApiSharesRoute
+    }
+    '/api/shared/$sharePolicyId/observations': {
+      id: '/api/shared/$sharePolicyId/observations'
+      path: '/api/shared/$sharePolicyId/observations'
+      fullPath: '/api/shared/$sharePolicyId/observations'
+      preLoaderRoute: typeof ApiSharedSharePolicyIdObservationsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/review-tasks/$reviewTaskId/resolve': {
       id: '/api/review-tasks/$reviewTaskId/resolve'
       path: '/resolve'
       fullPath: '/api/review-tasks/$reviewTaskId/resolve'
       preLoaderRoute: typeof ApiReviewTasksReviewTaskIdResolveRouteImport
       parentRoute: typeof ApiReviewTasksReviewTaskIdRoute
+    }
+    '/api/intake/$intakeId/steps': {
+      id: '/api/intake/$intakeId/steps'
+      path: '/steps'
+      fullPath: '/api/intake/$intakeId/steps'
+      preLoaderRoute: typeof ApiIntakeIntakeIdStepsRouteImport
+      parentRoute: typeof ApiIntakeIntakeIdRoute
+    }
+    '/api/intake/$intakeId/skip': {
+      id: '/api/intake/$intakeId/skip'
+      path: '/skip'
+      fullPath: '/api/intake/$intakeId/skip'
+      preLoaderRoute: typeof ApiIntakeIntakeIdSkipRouteImport
+      parentRoute: typeof ApiIntakeIntakeIdRoute
+    }
+    '/api/intake/$intakeId/complete': {
+      id: '/api/intake/$intakeId/complete'
+      path: '/complete'
+      fullPath: '/api/intake/$intakeId/complete'
+      preLoaderRoute: typeof ApiIntakeIntakeIdCompleteRouteImport
+      parentRoute: typeof ApiIntakeIntakeIdRoute
     }
     '/api/imports/$importJobId/retry': {
       id: '/api/imports/$importJobId/retry'
@@ -279,6 +437,33 @@ const ApiImportsRouteWithChildren = ApiImportsRoute._addFileChildren(
   ApiImportsRouteChildren,
 )
 
+interface ApiIntakeIntakeIdRouteChildren {
+  ApiIntakeIntakeIdCompleteRoute: typeof ApiIntakeIntakeIdCompleteRoute
+  ApiIntakeIntakeIdSkipRoute: typeof ApiIntakeIntakeIdSkipRoute
+  ApiIntakeIntakeIdStepsRoute: typeof ApiIntakeIntakeIdStepsRoute
+}
+
+const ApiIntakeIntakeIdRouteChildren: ApiIntakeIntakeIdRouteChildren = {
+  ApiIntakeIntakeIdCompleteRoute: ApiIntakeIntakeIdCompleteRoute,
+  ApiIntakeIntakeIdSkipRoute: ApiIntakeIntakeIdSkipRoute,
+  ApiIntakeIntakeIdStepsRoute: ApiIntakeIntakeIdStepsRoute,
+}
+
+const ApiIntakeIntakeIdRouteWithChildren =
+  ApiIntakeIntakeIdRoute._addFileChildren(ApiIntakeIntakeIdRouteChildren)
+
+interface ApiIntakeRouteChildren {
+  ApiIntakeIntakeIdRoute: typeof ApiIntakeIntakeIdRouteWithChildren
+}
+
+const ApiIntakeRouteChildren: ApiIntakeRouteChildren = {
+  ApiIntakeIntakeIdRoute: ApiIntakeIntakeIdRouteWithChildren,
+}
+
+const ApiIntakeRouteWithChildren = ApiIntakeRoute._addFileChildren(
+  ApiIntakeRouteChildren,
+)
+
 interface ApiRecordsRouteChildren {
   ApiRecordsResourceTypeResourceIdActionRoute: typeof ApiRecordsResourceTypeResourceIdActionRoute
 }
@@ -319,13 +504,29 @@ const ApiReviewTasksRouteWithChildren = ApiReviewTasksRoute._addFileChildren(
   ApiReviewTasksRouteChildren,
 )
 
+interface ApiSharesRouteChildren {
+  ApiSharesSharePolicyIdRevokeRoute: typeof ApiSharesSharePolicyIdRevokeRoute
+}
+
+const ApiSharesRouteChildren: ApiSharesRouteChildren = {
+  ApiSharesSharePolicyIdRevokeRoute: ApiSharesSharePolicyIdRevokeRoute,
+}
+
+const ApiSharesRouteWithChildren = ApiSharesRoute._addFileChildren(
+  ApiSharesRouteChildren,
+)
+
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   ComponentsRoute: ComponentsRoute,
   ApiImportsRoute: ApiImportsRouteWithChildren,
+  ApiIntakeRoute: ApiIntakeRouteWithChildren,
   ApiRecordsRoute: ApiRecordsRouteWithChildren,
   ApiReviewTasksRoute: ApiReviewTasksRouteWithChildren,
+  ApiSharesRoute: ApiSharesRouteWithChildren,
   ApiAuthSplatRoute: ApiAuthSplatRoute,
+  ApiSharedSharePolicyIdObservationsRoute:
+    ApiSharedSharePolicyIdObservationsRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

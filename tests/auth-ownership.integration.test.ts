@@ -161,7 +161,7 @@ describeWithDatabase("authentication and ownership integration", () => {
     expect(document?.ownerUserId).toBe(owner.ownerUserId);
     expect(job?.ownerUserId).toBe(owner.ownerUserId);
     expect(blob?.ownerUserId).toBe(owner.ownerUserId);
-    expect(blob?.objectKey).toContain(`users/${owner.ownerUserId}/source-documents/${document?.id}`);
+    expect(blob?.objectKey).toContain(`users/${owner.ownerUserId}/source-documents/by-sha256/`);
     expect(queued?.payload).toEqual({ importJobId: job?.id });
   });
 });

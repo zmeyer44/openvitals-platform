@@ -17,7 +17,11 @@ export const domainEventTypeSchema = z.enum([
   "share.accessed",
   "share.revoked",
   "integration.connected",
-  "integration.sync_failed"
+  "integration.sync_failed",
+  "intake.started",
+  "intake.step_saved",
+  "intake.step_skipped",
+  "intake.completed"
 ]);
 
 export type DomainEventType = z.infer<typeof domainEventTypeSchema>;
@@ -39,7 +43,11 @@ export const auditActionSchema = z.enum([
   "share.accessed",
   "share.revoked",
   "integration.connected",
-  "integration.sync_failed"
+  "integration.sync_failed",
+  "intake.started",
+  "intake.step_saved",
+  "intake.step_skipped",
+  "intake.completed"
 ]);
 
 export type AuditAction = z.infer<typeof auditActionSchema>;

@@ -12,8 +12,10 @@ import {
   authUsers,
   importJobs,
   jobQueue,
+  observations,
   outboxEvents,
-  sourceDocuments
+  sourceDocuments,
+  sourceRecords
 } from "../packages/database/src/schema";
 import { createLocalObjectStore } from "../packages/ingestion/src/objectStore";
 
@@ -399,6 +401,60 @@ describeWithDatabase("import system v1 integration", () => {
     expect(afterRerun?.classifications).toHaveLength(beforeRetry?.classifications.length ?? 0);
     expect(afterRerun?.sourceRecords).toHaveLength(beforeRetry?.sourceRecords.length ?? 0);
     expect(afterRerun?.reviewTasks).toHaveLength(beforeRetry?.reviewTasks.length ?? 0);
+  });
+
+  it("refuses to retry imports that have materialized canonical records", async () => {
+    const owner = await createOwner();
+    const { createImport, retryImport } = await import("../apps/web/src/server/imports");
+    const { processImportJob } = await import("../packages/ingestion/src/importPipeline");
+
+    const created = await createImport(db, {
+      owner,
+      fileName: "canonical.csv",
+      mimeType: "text/csv",
+      content: Buffer.from("test_name,value,unit,date\nHemoglobin,13.2,g/dL,2025-01-02\n"),
+      idempotencyKey: "import-v1:retry-canonical-block",
+      objectStorageRoot
+    });
+
+    await processImportJob({
+      db,
+      importJobId: created.importJobId,
+      objectStore: createLocalObjectStore(objectStorageRoot),
+      workerId: "worker-import-v1"
+    });
+
+    const [sourceRecord] = await db
+      .select()
+      .from(sourceRecords)
+      .where(eq(sourceRecords.importJobId, created.importJobId))
+      .limit(1);
+    const [observation] = await db
+      .select()
+      .from(observations)
+      .where(eq(observations.sourceRecordId, sourceRecord!.id))
+      .limit(1);
+    expect(observation?.displayName).toBe("Hemoglobin");
+
+    await db
+      .update(importJobs)
+      .set({ status: "failed", errorCode: "synthetic", completedAt: new Date() })
+      .where(eq(importJobs.id, created.importJobId));
+    await db
+      .update(jobQueue)
+      .set({ status: "dead_letter", attempts: 5, deadLetterReason: "synthetic" })
+      .where(eq(jobQueue.idempotencyKey, `job:import.health_data:${created.importJobId}`));
+
+    await expect(retryImport(db, { owner, importJobId: created.importJobId })).rejects.toMatchObject({
+      status: 409,
+      code: "import_retry_has_canonical_records"
+    });
+
+    const stillThere = await db
+      .select()
+      .from(observations)
+      .where(eq(observations.id, observation!.id));
+    expect(stillThere).toHaveLength(1);
   });
 
   it("refuses to retry while the queued job is running", async () => {

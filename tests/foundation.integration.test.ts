@@ -5,7 +5,7 @@ import { Pool } from "pg";
 import { recipientActor } from "../packages/domain/src/types";
 import { createDb, type OpenVitalsDatabase } from "../packages/database/src/client";
 import { completeJob, enqueueJob, failJob, leaseNextJob } from "../packages/database/src/jobs";
-import { listSharedObservations, recordShareAccess } from "../packages/database/src/sharing";
+import { listSharedObservations } from "../packages/database/src/sharing";
 import {
   appUsers,
   auditEvents,
@@ -514,6 +514,8 @@ describeWithDatabase("OpenVitals foundation database integration", () => {
     const sharedRows = await listSharedObservations(db, {
       policyId: policy.id,
       recipientUserId: recipient.id,
+      actor: recipientActor(recipient.id),
+      metadata: { channel: "integration-test" },
       now: new Date("2025-02-15T00:00:00Z")
     });
 
@@ -522,18 +524,11 @@ describeWithDatabase("OpenVitals foundation database integration", () => {
     const outsiderRows = await listSharedObservations(db, {
       policyId: policy.id,
       recipientUserId: outsider.id,
+      actor: recipientActor(outsider.id),
       now: new Date("2025-02-15T00:00:00Z")
     });
 
     expect(outsiderRows).toHaveLength(0);
-
-    await recordShareAccess(db, {
-      ownerUserId: owner.id,
-      policyId: policy.id,
-      actor: recipientActor(recipient.id),
-      resultCount: sharedRows.length,
-      metadata: { channel: "integration-test" }
-    });
 
     const [shareAudit] = await db
       .select()
@@ -544,14 +539,111 @@ describeWithDatabase("OpenVitals foundation database integration", () => {
     expect(shareAudit?.actorId).toBe(recipient.id);
     expect(shareAudit?.metadata).toEqual({ resultCount: 1, channel: "integration-test" });
 
+    const [shareOutbox] = await db
+      .select()
+      .from(outboxEvents)
+      .where(and(eq(outboxEvents.eventType, "share.accessed"), eq(outboxEvents.aggregateId, policy.id)))
+      .limit(1);
+    expect(shareOutbox?.actorId).toBe(recipient.id);
+
     await db.update(sharePolicies).set({ status: "revoked" }).where(eq(sharePolicies.id, policy.id));
 
     const revokedRows = await listSharedObservations(db, {
       policyId: policy.id,
       recipientUserId: recipient.id,
+      actor: recipientActor(recipient.id),
       now: new Date("2025-02-15T00:00:00Z")
     });
 
     expect(revokedRows).toHaveLength(0);
+  });
+
+  it("creates, reads, and revokes authenticated-recipient share policies through the server API layer", async () => {
+    const owner = await createUser({ email: "share-api-owner@example.test", displayName: "Share API Owner" });
+    const recipient = await createUser({ email: "share-api-recipient@example.test", displayName: "Share API Recipient" });
+    const source = await createSource({ ownerUserId: owner.id });
+    const { createSharePolicy, listSharedObservationsForAuthenticatedRecipient, revokeSharePolicy } = await import(
+      "../apps/web/src/server/shares"
+    );
+
+    const [lab] = await db
+      .insert(observations)
+      .values({
+        ownerUserId: owner.id,
+        sourceRecordId: source.record.id,
+        category: "labs",
+        displayName: "A1c",
+        observedAt: new Date("2025-02-10T12:00:00Z"),
+        originalValue: "5.4",
+        valueNumeric: "5.400000",
+        unitOriginal: "%",
+        unitNormalized: "%",
+        reviewState: "not_required"
+      })
+      .returning();
+
+    await db.insert(observations).values({
+      ownerUserId: owner.id,
+      sourceRecordId: source.record.id,
+      category: "vitals",
+      displayName: "Blood Pressure",
+      observedAt: new Date("2025-02-10T12:00:00Z"),
+      originalValue: "118/76",
+      valueText: "118/76",
+      reviewState: "not_required"
+    });
+
+    const ownerContext = { ownerUserId: owner.id, actor: { type: "user" as const, id: owner.id } };
+    const recipientContext = { ownerUserId: recipient.id, actor: { type: "user" as const, id: recipient.id } };
+
+    const created = await createSharePolicy(db, {
+      owner: ownerContext,
+      body: {
+        recipientUserId: recipient.id,
+        recipientEmail: recipient.email,
+        recipientName: recipient.displayName,
+        categories: ["labs"],
+        startsAt: new Date("2025-01-01T00:00:00Z"),
+        expiresAt: new Date("2027-12-31T00:00:00Z")
+      }
+    });
+
+    expect(created.policy.status).toBe("active");
+    expect(created.scopes.map((scope) => scope.category)).toEqual(["labs"]);
+
+    const shared = await listSharedObservationsForAuthenticatedRecipient(db, {
+      recipient: recipientContext,
+      sharePolicyId: created.policy.id
+    });
+    expect(shared.map((row) => row.id)).toEqual([lab!.id]);
+
+    const accessAudit = await db
+      .select()
+      .from(auditEvents)
+      .where(and(eq(auditEvents.action, "share.accessed"), eq(auditEvents.resourceId, created.policy.id)));
+    expect(accessAudit).toHaveLength(1);
+    expect(accessAudit[0]?.actorType).toBe("recipient");
+
+    const revoked = await revokeSharePolicy(db, {
+      owner: ownerContext,
+      sharePolicyId: created.policy.id
+    });
+    expect(revoked.status).toBe("revoked");
+
+    const afterRevoke = await listSharedObservationsForAuthenticatedRecipient(db, {
+      recipient: recipientContext,
+      sharePolicyId: created.policy.id
+    });
+    expect(afterRevoke).toHaveLength(0);
+
+    const shareEvents = await db
+      .select()
+      .from(outboxEvents)
+      .where(eq(outboxEvents.aggregateId, created.policy.id));
+    expect(shareEvents.map((event) => event.eventType).sort()).toEqual([
+      "share.accessed",
+      "share.created",
+      "share.revoked"
+    ]);
   });
 });
