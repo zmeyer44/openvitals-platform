@@ -7,7 +7,8 @@ import {
   reviewTasks,
   sourceDocuments,
   type ImportJobStatus,
-  type OpenVitalsDatabase
+  type OpenVitalsDatabase,
+  type OpenVitalsDbExecutor
 } from "@openvitals/database";
 import { sha256Hex, workerActor, type Actor } from "@openvitals/domain";
 import { enqueueOutboxEvent, writeAuditEvent } from "@openvitals/events";
@@ -45,7 +46,7 @@ type StatusTransitionInput = {
   documentUpdates?: Partial<typeof sourceDocuments.$inferInsert> | undefined;
 };
 
-async function applyStatusTransition(db: OpenVitalsDatabase, input: StatusTransitionInput): Promise<void> {
+async function applyStatusTransition(db: OpenVitalsDbExecutor, input: StatusTransitionInput): Promise<void> {
   const now = new Date();
 
   await db
@@ -94,9 +95,7 @@ async function markImportFailed(
   const actor = workerActor(input.workerId);
 
   await db.transaction(async (tx) => {
-    const txDb = tx as unknown as OpenVitalsDatabase;
-
-    await applyStatusTransition(txDb, {
+    await applyStatusTransition(tx, {
       importJobId: input.importJobId,
       sourceDocumentId: input.sourceDocumentId,
       ownerUserId: input.ownerUserId,
@@ -115,7 +114,7 @@ async function markImportFailed(
       }
     });
 
-    await enqueueOutboxEvent(txDb, {
+    await enqueueOutboxEvent(tx, {
       eventType: "import.failed",
       aggregateType: "import_job",
       aggregateId: input.importJobId,
@@ -127,7 +126,7 @@ async function markImportFailed(
       }
     });
 
-    await writeAuditEvent(txDb, {
+    await writeAuditEvent(tx, {
       action: "import.failed",
       resourceType: "import_job",
       resourceId: input.importJobId,
@@ -187,8 +186,7 @@ export async function processImportJob(input: ProcessImportJobInput): Promise<Pr
   }
 
   await input.db.transaction(async (tx) => {
-    const txDb = tx as unknown as OpenVitalsDatabase;
-    await enqueueOutboxEvent(txDb, {
+    await enqueueOutboxEvent(tx, {
       eventType: "import.started",
       aggregateType: "import_job",
       aggregateId: job.id,
@@ -199,7 +197,7 @@ export async function processImportJob(input: ProcessImportJobInput): Promise<Pr
       }
     });
 
-    await writeAuditEvent(txDb, {
+    await writeAuditEvent(tx, {
       action: "import.started",
       resourceType: "import_job",
       resourceId: job.id,
@@ -238,10 +236,8 @@ export async function processImportJob(input: ProcessImportJobInput): Promise<Pr
 
   if (!selected) {
     await input.db.transaction(async (tx) => {
-      const txDb = tx as unknown as OpenVitalsDatabase;
-
       await recordFileClassifications(
-        txDb,
+        tx,
         classificationResult.decisions.map((decision) => ({
           ownerUserId: job.ownerUserId,
           importJobId: job.id,
@@ -262,7 +258,7 @@ export async function processImportJob(input: ProcessImportJobInput): Promise<Pr
         }))
       );
 
-      await applyStatusTransition(txDb, {
+      await applyStatusTransition(tx, {
         importJobId: job.id,
         sourceDocumentId: document.id,
         ownerUserId: job.ownerUserId,
@@ -287,14 +283,45 @@ export async function processImportJob(input: ProcessImportJobInput): Promise<Pr
         }
       });
 
-      await txDb.insert(reviewTasks).values({
+      const [reviewTask] = await tx
+        .insert(reviewTasks)
+        .values({
+          ownerUserId: job.ownerUserId,
+          resourceType: "source_document",
+          resourceId: document.id,
+          reason: "unsupported_format",
+          suggestedValue: {
+            fileName: document.fileName,
+            mimeType: document.mimeType
+          }
+        })
+        .returning();
+
+      if (!reviewTask) {
+        throw new Error("Failed to create review task for unsupported format");
+      }
+
+      await enqueueOutboxEvent(tx, {
+        eventType: "review_task.created",
+        aggregateType: "source_document",
+        aggregateId: document.id,
         ownerUserId: job.ownerUserId,
-        resourceType: "source_document",
-        resourceId: document.id,
-        reason: "unsupported_format",
-        suggestedValue: {
-          fileName: document.fileName,
-          mimeType: document.mimeType
+        actor,
+        payload: {
+          reason: "unsupported_format",
+          reviewTaskId: reviewTask.id
+        }
+      });
+
+      await writeAuditEvent(tx, {
+        action: "review_task.created",
+        resourceType: "review_task",
+        resourceId: reviewTask.id,
+        ownerUserId: job.ownerUserId,
+        actor,
+        metadata: {
+          sourceDocumentId: document.id,
+          reason: "unsupported_format"
         }
       });
     });
@@ -304,10 +331,8 @@ export async function processImportJob(input: ProcessImportJobInput): Promise<Pr
   }
 
   await input.db.transaction(async (tx) => {
-    const txDb = tx as unknown as OpenVitalsDatabase;
-
     await recordFileClassifications(
-      txDb,
+      tx,
       classificationResult.decisions.map((decision) => ({
         ownerUserId: job.ownerUserId,
         importJobId: job.id,
@@ -328,7 +353,7 @@ export async function processImportJob(input: ProcessImportJobInput): Promise<Pr
       }))
     );
 
-    await applyStatusTransition(txDb, {
+    await applyStatusTransition(tx, {
       importJobId: job.id,
       sourceDocumentId: document.id,
       ownerUserId: job.ownerUserId,
@@ -355,7 +380,7 @@ export async function processImportJob(input: ProcessImportJobInput): Promise<Pr
 
   if (selected.empty) {
     await input.db.transaction(async (tx) => {
-      await applyStatusTransition(tx as unknown as OpenVitalsDatabase, {
+      await applyStatusTransition(tx, {
         importJobId: job.id,
         sourceDocumentId: document.id,
         ownerUserId: job.ownerUserId,
@@ -381,7 +406,7 @@ export async function processImportJob(input: ProcessImportJobInput): Promise<Pr
   const parsed = await parser.parse(file);
 
   await input.db.transaction(async (tx) => {
-    await applyStatusTransition(tx as unknown as OpenVitalsDatabase, {
+    await applyStatusTransition(tx, {
       importJobId: job.id,
       sourceDocumentId: document.id,
       ownerUserId: job.ownerUserId,
@@ -414,7 +439,7 @@ export async function processImportJob(input: ProcessImportJobInput): Promise<Pr
   }
 
   await input.db.transaction(async (tx) => {
-    await applyStatusTransition(tx as unknown as OpenVitalsDatabase, {
+    await applyStatusTransition(tx, {
       importJobId: job.id,
       sourceDocumentId: document.id,
       ownerUserId: job.ownerUserId,
@@ -433,9 +458,7 @@ export async function processImportJob(input: ProcessImportJobInput): Promise<Pr
   currentStatus = "normalized";
 
   const result = await input.db.transaction(async (tx) => {
-    const txDb = tx as unknown as OpenVitalsDatabase;
-
-    const materialized = await parser.materialize(txDb, normalized, {
+    const materialized = await parser.materialize(tx, normalized, {
       ownerUserId: job.ownerUserId,
       sourceDocumentId: document.id,
       importJobId: job.id,
@@ -444,7 +467,7 @@ export async function processImportJob(input: ProcessImportJobInput): Promise<Pr
 
     const finalStatus: ImportJobStatus = materialized.reviewTaskCount > 0 ? "needs_review" : "completed";
 
-    await applyStatusTransition(txDb, {
+    await applyStatusTransition(tx, {
       importJobId: job.id,
       sourceDocumentId: document.id,
       ownerUserId: job.ownerUserId,
@@ -470,7 +493,7 @@ export async function processImportJob(input: ProcessImportJobInput): Promise<Pr
       }
     });
 
-    await enqueueOutboxEvent(txDb, {
+    await enqueueOutboxEvent(tx, {
       eventType: "import.completed",
       aggregateType: "import_job",
       aggregateId: job.id,
@@ -483,7 +506,7 @@ export async function processImportJob(input: ProcessImportJobInput): Promise<Pr
       }
     });
 
-    await writeAuditEvent(txDb, {
+    await writeAuditEvent(tx, {
       action: "import.completed",
       resourceType: "import_job",
       resourceId: job.id,

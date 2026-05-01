@@ -148,8 +148,6 @@ export async function createImport(
 
   try {
     const result = await db.transaction(async (tx) => {
-      const txDb = tx as unknown as OpenVitalsDatabase;
-
       const [sourceDocument] = await tx
         .insert(sourceDocuments)
         .values({
@@ -201,7 +199,7 @@ export async function createImport(
         throw new Error("Failed to create import job");
       }
 
-      await appendImportStatusHistory(txDb, {
+      await appendImportStatusHistory(tx, {
         ownerUserId,
         importJobId: importJob.id,
         sourceDocumentId: sourceDocument.id,
@@ -217,7 +215,7 @@ export async function createImport(
         }
       });
 
-      await enqueueJob(txDb, {
+      await enqueueJob(tx, {
         kind: "import.health_data",
         payload: { importJobId: importJob.id },
         idempotencyKey: importQueueIdempotencyKey(importJob.id)
@@ -387,7 +385,6 @@ export async function retryImport(
 
   try {
     await db.transaction(async (tx) => {
-      const txDb = tx as unknown as OpenVitalsDatabase;
       const now = new Date();
       const importJobId = detail.importJob.id;
       const sourceDocumentId = detail.sourceDocument.id;
@@ -459,7 +456,7 @@ export async function retryImport(
         })
         .where(eq(sourceDocuments.id, sourceDocumentId));
 
-      await appendImportStatusHistory(txDb, {
+      await appendImportStatusHistory(tx, {
         ownerUserId,
         importJobId,
         sourceDocumentId,
@@ -469,7 +466,7 @@ export async function retryImport(
         reason: "manual_retry"
       });
 
-      await retryJobByIdempotencyKey(txDb, {
+      await retryJobByIdempotencyKey(tx, {
         kind: "import.health_data",
         idempotencyKey: importQueueIdempotencyKey(importJobId),
         payload: { importJobId },

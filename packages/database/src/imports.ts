@@ -1,5 +1,5 @@
 import type { Actor } from "@openvitals/domain";
-import type { OpenVitalsDatabase } from "./client";
+import type { OpenVitalsDbExecutor } from "./client";
 import {
   fileClassifications,
   importJobs,
@@ -43,7 +43,7 @@ export function importQueueIdempotencyKey(importJobId: string): string {
 }
 
 export async function appendImportStatusHistory(
-  db: OpenVitalsDatabase,
+  db: OpenVitalsDbExecutor,
   input: AppendImportStatusHistoryInput
 ): Promise<void> {
   await db.insert(importStatusHistory).values({
@@ -61,7 +61,7 @@ export async function appendImportStatusHistory(
 }
 
 export async function recordFileClassifications(
-  db: OpenVitalsDatabase,
+  db: OpenVitalsDbExecutor,
   records: RecordFileClassificationInput[]
 ): Promise<void> {
   if (records.length === 0) {

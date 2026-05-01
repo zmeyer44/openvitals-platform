@@ -1,6 +1,6 @@
 import { and, eq, gt, gte, isNull, lte, or, type SQL } from "drizzle-orm";
 import type { Actor } from "@openvitals/domain";
-import type { OpenVitalsDatabase } from "./client";
+import type { OpenVitalsDbExecutor } from "./client";
 import { auditEvents, observations, sharePolicies, sharePolicyScopes } from "./schema";
 
 export type SharedObservationRow = {
@@ -25,7 +25,7 @@ export type ListSharedObservationsInput = {
 };
 
 export async function listSharedObservations(
-  db: OpenVitalsDatabase,
+  db: OpenVitalsDbExecutor,
   input: ListSharedObservationsInput
 ): Promise<SharedObservationRow[]> {
   const now = input.now ?? new Date();
@@ -75,7 +75,7 @@ export async function listSharedObservations(
 }
 
 export async function recordShareAccess(
-  db: OpenVitalsDatabase,
+  db: OpenVitalsDbExecutor,
   input: {
     ownerUserId: string;
     policyId: string;

@@ -8,9 +8,11 @@ import { Pool } from "pg";
 import { createDb, type OpenVitalsDatabase } from "../packages/database/src/client";
 import {
   appUsers,
+  auditEvents,
   authUsers,
   importJobs,
   jobQueue,
+  outboxEvents,
   sourceDocuments
 } from "../packages/database/src/schema";
 import { createLocalObjectStore } from "../packages/ingestion/src/objectStore";
@@ -233,6 +235,18 @@ describeWithDatabase("import system v1 integration", () => {
     expect(detail?.reviewTasks[0]?.reason).toBe("unsupported_format");
     expect(detail?.classifications).toHaveLength(3);
     expect(detail?.classifications.every((classification) => classification.decision === "unsupported")).toBe(true);
+
+    const outbox = await db
+      .select()
+      .from(outboxEvents)
+      .where(eq(outboxEvents.aggregateId, detail!.sourceDocument.id));
+    expect(outbox.find((event) => event.eventType === "review_task.created")).toBeDefined();
+
+    const audit = await db
+      .select()
+      .from(auditEvents)
+      .where(eq(auditEvents.resourceId, detail!.reviewTasks[0]!.id));
+    expect(audit.find((event) => event.action === "review_task.created")).toBeDefined();
   });
 
   it("surfaces and requeues failed or dead-lettered import jobs", async () => {

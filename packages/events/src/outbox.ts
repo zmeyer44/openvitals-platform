@@ -1,5 +1,5 @@
 import { eq, sql } from "drizzle-orm";
-import type { OpenVitalsDatabase } from "@openvitals/database";
+import type { OpenVitalsDbExecutor } from "@openvitals/database";
 import { auditEvents, outboxEvents, type JsonObject } from "@openvitals/database";
 import type { Actor } from "@openvitals/domain";
 import { auditActionSchema, domainEventTypeSchema, type AuditAction, type DomainEventType } from "./schemas";
@@ -73,7 +73,7 @@ export type EnqueueOutboxEventInput = {
 };
 
 export async function enqueueOutboxEvent(
-  db: OpenVitalsDatabase,
+  db: OpenVitalsDbExecutor,
   input: EnqueueOutboxEventInput
 ): Promise<OutboxEvent> {
   domainEventTypeSchema.parse(input.eventType);
@@ -111,7 +111,7 @@ export type WriteAuditEventInput = {
 };
 
 export async function writeAuditEvent(
-  db: OpenVitalsDatabase,
+  db: OpenVitalsDbExecutor,
   input: WriteAuditEventInput
 ): Promise<void> {
   auditActionSchema.parse(input.action);
@@ -130,7 +130,7 @@ export async function writeAuditEvent(
 }
 
 export async function emitAuditedEvent(
-  db: OpenVitalsDatabase,
+  db: OpenVitalsDbExecutor,
   input: EnqueueOutboxEventInput & {
     auditAction?: AuditAction;
     resourceType?: string;
@@ -152,7 +152,7 @@ export async function emitAuditedEvent(
 }
 
 export async function claimNextOutboxEvent(
-  db: OpenVitalsDatabase,
+  db: OpenVitalsDbExecutor,
   workerId: string
 ): Promise<OutboxEvent | null> {
   const result = await db.execute(sql`
@@ -178,7 +178,7 @@ export async function claimNextOutboxEvent(
   return row ? mapOutboxRow(row) : null;
 }
 
-export async function markOutboxEventSent(db: OpenVitalsDatabase, eventId: string): Promise<void> {
+export async function markOutboxEventSent(db: OpenVitalsDbExecutor, eventId: string): Promise<void> {
   await db
     .update(outboxEvents)
     .set({
@@ -192,7 +192,7 @@ export async function markOutboxEventSent(db: OpenVitalsDatabase, eventId: strin
 }
 
 export async function markOutboxEventFailed(
-  db: OpenVitalsDatabase,
+  db: OpenVitalsDbExecutor,
   event: OutboxEvent,
   error: unknown
 ): Promise<void> {

@@ -1,5 +1,5 @@
 import { eq, sql } from "drizzle-orm";
-import type { OpenVitalsDatabase } from "./client";
+import type { OpenVitalsDbExecutor } from "./client";
 import { jobQueue, type JsonObject } from "./schema";
 
 export type QueuedJob = typeof jobQueue.$inferSelect;
@@ -61,7 +61,7 @@ function mapJobQueueRow(row: JobQueueSqlRow): QueuedJob {
 }
 
 export async function enqueueJob(
-  db: OpenVitalsDatabase,
+  db: OpenVitalsDbExecutor,
   input: EnqueueJobInput
 ): Promise<QueuedJob> {
   const [job] = await db
@@ -91,7 +91,7 @@ export async function enqueueJob(
 }
 
 export async function leaseNextJob(
-  db: OpenVitalsDatabase,
+  db: OpenVitalsDbExecutor,
   workerId: string,
   kinds: string[]
 ): Promise<QueuedJob | null> {
@@ -129,7 +129,7 @@ export async function leaseNextJob(
   return row ? mapJobQueueRow(row) : null;
 }
 
-export async function completeJob(db: OpenVitalsDatabase, jobId: string): Promise<void> {
+export async function completeJob(db: OpenVitalsDbExecutor, jobId: string): Promise<void> {
   await db
     .update(jobQueue)
     .set({
@@ -143,7 +143,7 @@ export async function completeJob(db: OpenVitalsDatabase, jobId: string): Promis
 }
 
 export async function failJob(
-  db: OpenVitalsDatabase,
+  db: OpenVitalsDbExecutor,
   job: QueuedJob,
   error: unknown,
   options: { retryDelaySeconds?: number } = {}
@@ -178,7 +178,7 @@ export class JobRetryConflictError extends Error {
 }
 
 export async function retryJobByIdempotencyKey(
-  db: OpenVitalsDatabase,
+  db: OpenVitalsDbExecutor,
   input: {
     kind: string;
     idempotencyKey: string;

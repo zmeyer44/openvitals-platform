@@ -1,7 +1,7 @@
 import {
   reviewTasks,
   sourceRecords,
-  type OpenVitalsDatabase
+  type OpenVitalsDbExecutor
 } from "@openvitals/database";
 import { workerActor } from "@openvitals/domain";
 import { enqueueOutboxEvent, writeAuditEvent } from "@openvitals/events";
@@ -116,7 +116,7 @@ function createPlaceholderParser(definition: PlaceholderDefinition): HealthDataP
     },
 
     async materialize(
-      db: OpenVitalsDatabase,
+      db: OpenVitalsDbExecutor,
       records: NormalizedRecord[],
       context: MaterializeContext
     ): Promise<MaterializeResult> {

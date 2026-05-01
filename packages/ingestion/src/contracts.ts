@@ -1,4 +1,4 @@
-import type { OpenVitalsDatabase } from "@openvitals/database";
+import type { OpenVitalsDbExecutor } from "@openvitals/database";
 import type { ReviewReason, SourceReference, Warning } from "@openvitals/domain";
 
 export type ImportFile = {
@@ -82,7 +82,7 @@ export type HealthDataParser = {
   parse(file: ImportFile): Promise<ParsedRecord[]>;
   normalize(records: ParsedRecord[]): Promise<NormalizedRecord[]>;
   materialize(
-    db: OpenVitalsDatabase,
+    db: OpenVitalsDbExecutor,
     records: NormalizedRecord[],
     context: MaterializeContext
   ): Promise<MaterializeResult>;

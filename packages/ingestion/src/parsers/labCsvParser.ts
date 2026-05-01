@@ -4,7 +4,7 @@ import {
   provenance,
   reviewTasks,
   sourceRecords,
-  type OpenVitalsDatabase
+  type OpenVitalsDbExecutor
 } from "@openvitals/database";
 import {
   buildReviewReasons,
@@ -219,7 +219,7 @@ export const labCsvParser: HealthDataParser = {
   },
 
   async materialize(
-    db: OpenVitalsDatabase,
+    db: OpenVitalsDbExecutor,
     records: NormalizedRecord[],
     context: MaterializeContext
   ): Promise<MaterializeResult> {
