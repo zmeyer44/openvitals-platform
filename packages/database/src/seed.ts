@@ -6,7 +6,9 @@ import {
   auditEvents,
   authUsers,
   conditions,
+  fileClassifications,
   importJobs,
+  importStatusHistory,
   medications,
   observations,
   outboxEvents,
@@ -113,6 +115,75 @@ async function createSourceRecord(
     throw new Error("Failed to create seed import job");
   }
 
+  const parserName = input.sourceKind === "file" ? "openvitals.lab_csv" : "openvitals.manual";
+  const parserVersion = input.sourceKind === "file" ? "0.1.0" : "0.0.1";
+
+  await db.insert(fileClassifications).values({
+    ownerUserId: input.ownerUserId,
+    sourceDocumentId: document.id,
+    importJobId: job.id,
+    parserName,
+    parserVersion,
+    decision: input.status === "needs_review" ? "review_needed" : "supported",
+    classification: input.sourceKind === "file" ? "lab_csv" : input.sourceKind,
+    confidence: input.status === "needs_review" ? "0.6200" : "0.9600",
+    selected: true,
+    warnings: input.status === "needs_review" ? { items: ["missing_date"] } : { items: [] }
+  });
+
+  await db.insert(importStatusHistory).values([
+    {
+      ownerUserId: input.ownerUserId,
+      sourceDocumentId: document.id,
+      importJobId: job.id,
+      fromStatus: null,
+      toStatus: "uploaded",
+      actorType: "user",
+      actorId: input.ownerUserId,
+      reason: "seed_source_created"
+    },
+    {
+      ownerUserId: input.ownerUserId,
+      sourceDocumentId: document.id,
+      importJobId: job.id,
+      fromStatus: "uploaded",
+      toStatus: "classified",
+      actorType: "worker",
+      actorId: "seed-worker",
+      reason: "parser_selected"
+    },
+    {
+      ownerUserId: input.ownerUserId,
+      sourceDocumentId: document.id,
+      importJobId: job.id,
+      fromStatus: "classified",
+      toStatus: "parsed",
+      actorType: "worker",
+      actorId: "seed-worker",
+      reason: "parser_parse_completed"
+    },
+    {
+      ownerUserId: input.ownerUserId,
+      sourceDocumentId: document.id,
+      importJobId: job.id,
+      fromStatus: "parsed",
+      toStatus: "normalized",
+      actorType: "worker",
+      actorId: "seed-worker",
+      reason: "parser_normalize_completed"
+    },
+    {
+      ownerUserId: input.ownerUserId,
+      sourceDocumentId: document.id,
+      importJobId: job.id,
+      fromStatus: "normalized",
+      toStatus: input.status ?? "completed",
+      actorType: "worker",
+      actorId: "seed-worker",
+      reason: input.status === "needs_review" ? "materialized_with_review_tasks" : "materialized"
+    }
+  ]);
+
   const [record] = await db
     .insert(sourceRecords)
     .values({
@@ -120,8 +191,8 @@ async function createSourceRecord(
       sourceDocumentId: document.id,
       importJobId: job.id,
       recordType: input.recordType,
-      parserName: input.sourceKind === "file" ? "openvitals.lab_csv" : "openvitals.manual",
-      parserVersion: input.sourceKind === "file" ? "0.1.0" : "0.0.1",
+      parserName,
+      parserVersion,
       sourceText: input.sourceText,
       extractionConfidence: input.status === "needs_review" ? "0.6200" : "0.9600",
       originalPayload: input.originalPayload,

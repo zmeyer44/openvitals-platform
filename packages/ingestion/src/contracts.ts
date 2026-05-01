@@ -1,4 +1,4 @@
-import type { OpenVitalsDatabase } from "@openvitals/database";
+import type { OpenVitalsDbExecutor } from "@openvitals/database";
 import type { ReviewReason, SourceReference, Warning } from "@openvitals/domain";
 
 export type ImportFile = {
@@ -13,6 +13,7 @@ export type ClassificationResult = {
   classification: string;
   confidence: number;
   empty?: boolean;
+  reviewRequired?: boolean;
   warnings: Warning[];
 };
 
@@ -46,7 +47,20 @@ export type NormalizedObservation = {
   reviewReasons: ReviewReason[];
 };
 
-export type NormalizedRecord = NormalizedObservation;
+export type NormalizedReviewPlaceholder = {
+  temporaryId: string;
+  kind: "review_placeholder";
+  recordType: "unsupported" | "note";
+  reason: string;
+  confidence: number;
+  sourceText?: string;
+  sourceReference?: SourceReference;
+  original: Record<string, unknown>;
+  warnings: Warning[];
+  suggestedValue: Record<string, unknown>;
+};
+
+export type NormalizedRecord = NormalizedObservation | NormalizedReviewPlaceholder;
 
 export type MaterializeContext = {
   ownerUserId: string;
@@ -68,7 +82,7 @@ export type HealthDataParser = {
   parse(file: ImportFile): Promise<ParsedRecord[]>;
   normalize(records: ParsedRecord[]): Promise<NormalizedRecord[]>;
   materialize(
-    db: OpenVitalsDatabase,
+    db: OpenVitalsDbExecutor,
     records: NormalizedRecord[],
     context: MaterializeContext
   ): Promise<MaterializeResult>;

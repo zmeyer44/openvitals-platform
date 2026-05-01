@@ -44,6 +44,14 @@ export const importJobStatusEnum = pgEnum("import_job_status", [
   "failed"
 ]);
 
+export const fileClassificationDecisionEnum = pgEnum("file_classification_decision", [
+  "supported",
+  "unsupported",
+  "empty",
+  "review_needed",
+  "error"
+]);
+
 export const sourceKindEnum = pgEnum("source_kind", [
   "file",
   "integration",
@@ -337,6 +345,67 @@ export const importJobs = pgTable(
     uniqueIndex("import_jobs_idempotency_key_unique").on(table.idempotencyKey),
     index("import_jobs_owner_status_idx").on(table.ownerUserId, table.status),
     index("import_jobs_source_document_idx").on(table.sourceDocumentId)
+  ]
+);
+
+export const fileClassifications = pgTable(
+  "file_classifications",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    ownerUserId: uuid("owner_user_id")
+      .notNull()
+      .references(() => appUsers.id, { onDelete: "cascade" }),
+    sourceDocumentId: uuid("source_document_id")
+      .notNull()
+      .references(() => sourceDocuments.id, { onDelete: "cascade" }),
+    importJobId: uuid("import_job_id")
+      .notNull()
+      .references(() => importJobs.id, { onDelete: "cascade" }),
+    parserName: text("parser_name").notNull(),
+    parserVersion: text("parser_version").notNull(),
+    decision: fileClassificationDecisionEnum("decision").notNull(),
+    classification: text("classification").notNull(),
+    confidence: numeric("confidence", { precision: 5, scale: 4 }),
+    empty: boolean("empty").default(false).notNull(),
+    selected: boolean("selected").default(false).notNull(),
+    reason: text("reason"),
+    warnings: jsonb("warnings").$type<JsonObject>().default(sql`'{}'::jsonb`).notNull(),
+    metadata: jsonb("metadata").$type<JsonObject>().default(sql`'{}'::jsonb`).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull()
+  },
+  (table) => [
+    index("file_classifications_import_job_idx").on(table.importJobId),
+    index("file_classifications_document_idx").on(table.sourceDocumentId),
+    index("file_classifications_owner_decision_idx").on(table.ownerUserId, table.decision)
+  ]
+);
+
+export const importStatusHistory = pgTable(
+  "import_status_history",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    ownerUserId: uuid("owner_user_id")
+      .notNull()
+      .references(() => appUsers.id, { onDelete: "cascade" }),
+    importJobId: uuid("import_job_id")
+      .notNull()
+      .references(() => importJobs.id, { onDelete: "cascade" }),
+    sourceDocumentId: uuid("source_document_id")
+      .notNull()
+      .references(() => sourceDocuments.id, { onDelete: "cascade" }),
+    fromStatus: importJobStatusEnum("from_status"),
+    toStatus: importJobStatusEnum("to_status").notNull(),
+    actorType: actorTypeEnum("actor_type").default("system").notNull(),
+    actorId: text("actor_id"),
+    reason: text("reason"),
+    errorCode: text("error_code"),
+    metadata: jsonb("metadata").$type<JsonObject>().default(sql`'{}'::jsonb`).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull()
+  },
+  (table) => [
+    index("import_status_history_import_job_idx").on(table.importJobId, table.createdAt),
+    index("import_status_history_document_idx").on(table.sourceDocumentId, table.createdAt),
+    index("import_status_history_owner_idx").on(table.ownerUserId, table.createdAt)
   ]
 );
 

@@ -40,6 +40,8 @@ const tableNames = [
   "medications",
   "encounters",
   "source_records",
+  "file_classifications",
+  "import_status_history",
   "import_jobs",
   "source_documents",
   "blob_objects",
@@ -142,7 +144,7 @@ describeWithDatabase("authentication and ownership integration", () => {
       owner,
       fileName: "labs.csv",
       mimeType: "text/csv",
-      contentBase64: Buffer.from("test_name,value,unit\nHemoglobin,13.2,g/dL\n").toString("base64"),
+      content: Buffer.from("test_name,value,unit\nHemoglobin,13.2,g/dL\n"),
       idempotencyKey: "auth-import-owner:labs",
       objectStorageRoot
     });

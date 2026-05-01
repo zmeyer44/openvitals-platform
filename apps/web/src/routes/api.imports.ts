@@ -1,31 +1,50 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { z } from "zod";
+import { importJobStates } from "@openvitals/domain";
 import { requireAuthenticatedOwnerContext } from "../server/auth-context";
 import { db } from "../server/db";
-import { createImport } from "../server/imports";
+import { createImport, ImportApiError, listImports, parseMultipartImportRequest } from "../server/imports";
 
-const createImportRequestSchema = z.object({
-  fileName: z.string().min(1).max(255),
-  mimeType: z.string().min(1).max(255),
-  contentBase64: z.string().min(1),
-  idempotencyKey: z.string().min(1).max(255).optional()
+const listImportsSearchSchema = z.object({
+  status: z.enum(importJobStates).optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(25)
 });
 
 export const Route = createFileRoute("/api/imports")({
   server: {
     handlers: {
-      POST: async ({ request }) => {
+      GET: async ({ request }) => {
         const owner = await requireAuthenticatedOwnerContext(request);
-        const body = createImportRequestSchema.parse(await request.json());
-        const result = await createImport(db, {
+        const query = listImportsSearchSchema.parse(Object.fromEntries(new URL(request.url).searchParams));
+        const imports = await listImports(db, {
           owner,
-          fileName: body.fileName,
-          mimeType: body.mimeType,
-          contentBase64: body.contentBase64,
-          idempotencyKey: body.idempotencyKey
+          status: query.status,
+          limit: query.limit
         });
 
-        return Response.json(result);
+        return Response.json({ imports });
+      },
+
+      POST: async ({ request }) => {
+        const owner = await requireAuthenticatedOwnerContext(request);
+        try {
+          const upload = await parseMultipartImportRequest(request);
+          const result = await createImport(db, {
+            owner,
+            fileName: upload.fileName,
+            mimeType: upload.mimeType,
+            content: upload.content,
+            idempotencyKey: upload.idempotencyKey
+          });
+
+          return Response.json(result, { status: 201 });
+        } catch (error) {
+          if (error instanceof ImportApiError) {
+            return Response.json({ error: error.message, code: error.code }, { status: error.status });
+          }
+
+          throw error;
+        }
       }
     }
   }

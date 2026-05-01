@@ -12,7 +12,9 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as ComponentsRouteImport } from './routes/components'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as ApiImportsRouteImport } from './routes/api.imports'
+import { Route as ApiImportsImportJobIdRouteImport } from './routes/api.imports.$importJobId'
 import { Route as ApiAuthSplatRouteImport } from './routes/api.auth.$'
+import { Route as ApiImportsImportJobIdRetryRouteImport } from './routes/api.imports.$importJobId.retry'
 
 const ComponentsRoute = ComponentsRouteImport.update({
   id: '/components',
@@ -29,43 +31,79 @@ const ApiImportsRoute = ApiImportsRouteImport.update({
   path: '/api/imports',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiImportsImportJobIdRoute = ApiImportsImportJobIdRouteImport.update({
+  id: '/$importJobId',
+  path: '/$importJobId',
+  getParentRoute: () => ApiImportsRoute,
+} as any)
 const ApiAuthSplatRoute = ApiAuthSplatRouteImport.update({
   id: '/api/auth/$',
   path: '/api/auth/$',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiImportsImportJobIdRetryRoute =
+  ApiImportsImportJobIdRetryRouteImport.update({
+    id: '/retry',
+    path: '/retry',
+    getParentRoute: () => ApiImportsImportJobIdRoute,
+  } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/components': typeof ComponentsRoute
-  '/api/imports': typeof ApiImportsRoute
+  '/api/imports': typeof ApiImportsRouteWithChildren
   '/api/auth/$': typeof ApiAuthSplatRoute
+  '/api/imports/$importJobId': typeof ApiImportsImportJobIdRouteWithChildren
+  '/api/imports/$importJobId/retry': typeof ApiImportsImportJobIdRetryRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/components': typeof ComponentsRoute
-  '/api/imports': typeof ApiImportsRoute
+  '/api/imports': typeof ApiImportsRouteWithChildren
   '/api/auth/$': typeof ApiAuthSplatRoute
+  '/api/imports/$importJobId': typeof ApiImportsImportJobIdRouteWithChildren
+  '/api/imports/$importJobId/retry': typeof ApiImportsImportJobIdRetryRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/components': typeof ComponentsRoute
-  '/api/imports': typeof ApiImportsRoute
+  '/api/imports': typeof ApiImportsRouteWithChildren
   '/api/auth/$': typeof ApiAuthSplatRoute
+  '/api/imports/$importJobId': typeof ApiImportsImportJobIdRouteWithChildren
+  '/api/imports/$importJobId/retry': typeof ApiImportsImportJobIdRetryRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/components' | '/api/imports' | '/api/auth/$'
+  fullPaths:
+    | '/'
+    | '/components'
+    | '/api/imports'
+    | '/api/auth/$'
+    | '/api/imports/$importJobId'
+    | '/api/imports/$importJobId/retry'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/components' | '/api/imports' | '/api/auth/$'
-  id: '__root__' | '/' | '/components' | '/api/imports' | '/api/auth/$'
+  to:
+    | '/'
+    | '/components'
+    | '/api/imports'
+    | '/api/auth/$'
+    | '/api/imports/$importJobId'
+    | '/api/imports/$importJobId/retry'
+  id:
+    | '__root__'
+    | '/'
+    | '/components'
+    | '/api/imports'
+    | '/api/auth/$'
+    | '/api/imports/$importJobId'
+    | '/api/imports/$importJobId/retry'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   ComponentsRoute: typeof ComponentsRoute
-  ApiImportsRoute: typeof ApiImportsRoute
+  ApiImportsRoute: typeof ApiImportsRouteWithChildren
   ApiAuthSplatRoute: typeof ApiAuthSplatRoute
 }
 
@@ -92,6 +130,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiImportsRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/imports/$importJobId': {
+      id: '/api/imports/$importJobId'
+      path: '/$importJobId'
+      fullPath: '/api/imports/$importJobId'
+      preLoaderRoute: typeof ApiImportsImportJobIdRouteImport
+      parentRoute: typeof ApiImportsRoute
+    }
     '/api/auth/$': {
       id: '/api/auth/$'
       path: '/api/auth/$'
@@ -99,13 +144,45 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiAuthSplatRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/imports/$importJobId/retry': {
+      id: '/api/imports/$importJobId/retry'
+      path: '/retry'
+      fullPath: '/api/imports/$importJobId/retry'
+      preLoaderRoute: typeof ApiImportsImportJobIdRetryRouteImport
+      parentRoute: typeof ApiImportsImportJobIdRoute
+    }
   }
 }
+
+interface ApiImportsImportJobIdRouteChildren {
+  ApiImportsImportJobIdRetryRoute: typeof ApiImportsImportJobIdRetryRoute
+}
+
+const ApiImportsImportJobIdRouteChildren: ApiImportsImportJobIdRouteChildren = {
+  ApiImportsImportJobIdRetryRoute: ApiImportsImportJobIdRetryRoute,
+}
+
+const ApiImportsImportJobIdRouteWithChildren =
+  ApiImportsImportJobIdRoute._addFileChildren(
+    ApiImportsImportJobIdRouteChildren,
+  )
+
+interface ApiImportsRouteChildren {
+  ApiImportsImportJobIdRoute: typeof ApiImportsImportJobIdRouteWithChildren
+}
+
+const ApiImportsRouteChildren: ApiImportsRouteChildren = {
+  ApiImportsImportJobIdRoute: ApiImportsImportJobIdRouteWithChildren,
+}
+
+const ApiImportsRouteWithChildren = ApiImportsRoute._addFileChildren(
+  ApiImportsRouteChildren,
+)
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   ComponentsRoute: ComponentsRoute,
-  ApiImportsRoute: ApiImportsRoute,
+  ApiImportsRoute: ApiImportsRouteWithChildren,
   ApiAuthSplatRoute: ApiAuthSplatRoute,
 }
 export const routeTree = rootRouteImport

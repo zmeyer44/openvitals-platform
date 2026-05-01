@@ -1,5 +1,5 @@
 import { eq, sql } from "drizzle-orm";
-import type { OpenVitalsDatabase } from "./client";
+import type { OpenVitalsDbExecutor } from "./client";
 import { jobQueue, type JsonObject } from "./schema";
 
 export type QueuedJob = typeof jobQueue.$inferSelect;
@@ -61,7 +61,7 @@ function mapJobQueueRow(row: JobQueueSqlRow): QueuedJob {
 }
 
 export async function enqueueJob(
-  db: OpenVitalsDatabase,
+  db: OpenVitalsDbExecutor,
   input: EnqueueJobInput
 ): Promise<QueuedJob> {
   const [job] = await db
@@ -91,7 +91,7 @@ export async function enqueueJob(
 }
 
 export async function leaseNextJob(
-  db: OpenVitalsDatabase,
+  db: OpenVitalsDbExecutor,
   workerId: string,
   kinds: string[]
 ): Promise<QueuedJob | null> {
@@ -129,7 +129,7 @@ export async function leaseNextJob(
   return row ? mapJobQueueRow(row) : null;
 }
 
-export async function completeJob(db: OpenVitalsDatabase, jobId: string): Promise<void> {
+export async function completeJob(db: OpenVitalsDbExecutor, jobId: string): Promise<void> {
   await db
     .update(jobQueue)
     .set({
@@ -143,7 +143,7 @@ export async function completeJob(db: OpenVitalsDatabase, jobId: string): Promis
 }
 
 export async function failJob(
-  db: OpenVitalsDatabase,
+  db: OpenVitalsDbExecutor,
   job: QueuedJob,
   error: unknown,
   options: { retryDelaySeconds?: number } = {}
@@ -164,4 +164,75 @@ export async function failJob(
       updatedAt: new Date()
     })
     .where(eq(jobQueue.id, job.id));
+}
+
+export class JobRetryConflictError extends Error {
+  constructor(
+    message: string,
+    public readonly idempotencyKey: string,
+    public readonly currentStatus: QueuedJob["status"]
+  ) {
+    super(message);
+    this.name = "JobRetryConflictError";
+  }
+}
+
+export async function retryJobByIdempotencyKey(
+  db: OpenVitalsDbExecutor,
+  input: {
+    kind: string;
+    idempotencyKey: string;
+    payload?: JsonObject;
+    runAfter?: Date;
+    maxAttempts?: number;
+  }
+): Promise<QueuedJob> {
+  const now = new Date();
+  const [job] = await db
+    .insert(jobQueue)
+    .values({
+      kind: input.kind,
+      payload: input.payload ?? {},
+      idempotencyKey: input.idempotencyKey,
+      runAfter: input.runAfter ?? now,
+      maxAttempts: input.maxAttempts ?? 5
+    })
+    .onConflictDoUpdate({
+      target: jobQueue.idempotencyKey,
+      set: {
+        kind: input.kind,
+        status: "available",
+        payload: input.payload ?? {},
+        attempts: 0,
+        maxAttempts: input.maxAttempts ?? 5,
+        runAfter: input.runAfter ?? now,
+        lockedBy: null,
+        lockedAt: null,
+        lastError: null,
+        deadLetterReason: null,
+        updatedAt: now
+      },
+      setWhere: sql`${jobQueue.status} <> 'running'`
+    })
+    .returning();
+
+  if (job) {
+    return job;
+  }
+
+  const [existing] = await db
+    .select()
+    .from(jobQueue)
+    .where(eq(jobQueue.idempotencyKey, input.idempotencyKey))
+    .limit(1);
+
+  if (existing) {
+    throw new JobRetryConflictError(
+      `Job ${input.idempotencyKey} is currently ${existing.status} and cannot be retried.`,
+      input.idempotencyKey,
+      existing.status
+    );
+  }
+
+  throw new Error("Failed to retry job");
 }

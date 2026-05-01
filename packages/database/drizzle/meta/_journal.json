@@ -29,6 +29,13 @@
       "when": 1777640252237,
       "tag": "0003_broad_hedge_knight",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1777641703423,
+      "tag": "0004_eminent_mantis",
+      "breakpoints": true
     }
   ]
 }
