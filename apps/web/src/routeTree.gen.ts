@@ -10,12 +10,16 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as ComponentsRouteImport } from './routes/components'
+import { Route as AuthRouteImport } from './routes/_auth'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as DocumentsIntakeRouteImport } from './routes/documents.intake'
 import { Route as ApiSharesRouteImport } from './routes/api.shares'
 import { Route as ApiReviewTasksRouteImport } from './routes/api.review-tasks'
 import { Route as ApiRecordsRouteImport } from './routes/api.records'
 import { Route as ApiIntakeRouteImport } from './routes/api.intake'
 import { Route as ApiImportsRouteImport } from './routes/api.imports'
+import { Route as AuthSignupRouteImport } from './routes/_auth.signup'
+import { Route as AuthLoginRouteImport } from './routes/_auth.login'
 import { Route as ApiReviewTasksReviewTaskIdRouteImport } from './routes/api.review-tasks.$reviewTaskId'
 import { Route as ApiIntakeIntakeIdRouteImport } from './routes/api.intake.$intakeId'
 import { Route as ApiImportsImportJobIdRouteImport } from './routes/api.imports.$importJobId'
@@ -27,6 +31,7 @@ import { Route as ApiIntakeIntakeIdStepsRouteImport } from './routes/api.intake.
 import { Route as ApiIntakeIntakeIdSkipRouteImport } from './routes/api.intake.$intakeId.skip'
 import { Route as ApiIntakeIntakeIdCompleteRouteImport } from './routes/api.intake.$intakeId.complete'
 import { Route as ApiImportsImportJobIdRetryRouteImport } from './routes/api.imports.$importJobId.retry'
+import { Route as ApiImportsImportJobIdDocumentRouteImport } from './routes/api.imports.$importJobId.document'
 import { Route as ApiRecordsResourceTypeResourceIdActionRouteImport } from './routes/api.records.$resourceType.$resourceId.action'
 
 const ComponentsRoute = ComponentsRouteImport.update({
@@ -34,9 +39,18 @@ const ComponentsRoute = ComponentsRouteImport.update({
   path: '/components',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AuthRoute = AuthRouteImport.update({
+  id: '/_auth',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const DocumentsIntakeRoute = DocumentsIntakeRouteImport.update({
+  id: '/documents/intake',
+  path: '/documents/intake',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiSharesRoute = ApiSharesRouteImport.update({
@@ -63,6 +77,16 @@ const ApiImportsRoute = ApiImportsRouteImport.update({
   id: '/api/imports',
   path: '/api/imports',
   getParentRoute: () => rootRouteImport,
+} as any)
+const AuthSignupRoute = AuthSignupRouteImport.update({
+  id: '/signup',
+  path: '/signup',
+  getParentRoute: () => AuthRoute,
+} as any)
+const AuthLoginRoute = AuthLoginRouteImport.update({
+  id: '/login',
+  path: '/login',
+  getParentRoute: () => AuthRoute,
 } as any)
 const ApiReviewTasksReviewTaskIdRoute =
   ApiReviewTasksReviewTaskIdRouteImport.update({
@@ -125,6 +149,12 @@ const ApiImportsImportJobIdRetryRoute =
     path: '/retry',
     getParentRoute: () => ApiImportsImportJobIdRoute,
   } as any)
+const ApiImportsImportJobIdDocumentRoute =
+  ApiImportsImportJobIdDocumentRouteImport.update({
+    id: '/document',
+    path: '/document',
+    getParentRoute: () => ApiImportsImportJobIdRoute,
+  } as any)
 const ApiRecordsResourceTypeResourceIdActionRoute =
   ApiRecordsResourceTypeResourceIdActionRouteImport.update({
     id: '/$resourceType/$resourceId/action',
@@ -135,15 +165,19 @@ const ApiRecordsResourceTypeResourceIdActionRoute =
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/components': typeof ComponentsRoute
+  '/login': typeof AuthLoginRoute
+  '/signup': typeof AuthSignupRoute
   '/api/imports': typeof ApiImportsRouteWithChildren
   '/api/intake': typeof ApiIntakeRouteWithChildren
   '/api/records': typeof ApiRecordsRouteWithChildren
   '/api/review-tasks': typeof ApiReviewTasksRouteWithChildren
   '/api/shares': typeof ApiSharesRouteWithChildren
+  '/documents/intake': typeof DocumentsIntakeRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/imports/$importJobId': typeof ApiImportsImportJobIdRouteWithChildren
   '/api/intake/$intakeId': typeof ApiIntakeIntakeIdRouteWithChildren
   '/api/review-tasks/$reviewTaskId': typeof ApiReviewTasksReviewTaskIdRouteWithChildren
+  '/api/imports/$importJobId/document': typeof ApiImportsImportJobIdDocumentRoute
   '/api/imports/$importJobId/retry': typeof ApiImportsImportJobIdRetryRoute
   '/api/intake/$intakeId/complete': typeof ApiIntakeIntakeIdCompleteRoute
   '/api/intake/$intakeId/skip': typeof ApiIntakeIntakeIdSkipRoute
@@ -156,15 +190,19 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/components': typeof ComponentsRoute
+  '/login': typeof AuthLoginRoute
+  '/signup': typeof AuthSignupRoute
   '/api/imports': typeof ApiImportsRouteWithChildren
   '/api/intake': typeof ApiIntakeRouteWithChildren
   '/api/records': typeof ApiRecordsRouteWithChildren
   '/api/review-tasks': typeof ApiReviewTasksRouteWithChildren
   '/api/shares': typeof ApiSharesRouteWithChildren
+  '/documents/intake': typeof DocumentsIntakeRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/imports/$importJobId': typeof ApiImportsImportJobIdRouteWithChildren
   '/api/intake/$intakeId': typeof ApiIntakeIntakeIdRouteWithChildren
   '/api/review-tasks/$reviewTaskId': typeof ApiReviewTasksReviewTaskIdRouteWithChildren
+  '/api/imports/$importJobId/document': typeof ApiImportsImportJobIdDocumentRoute
   '/api/imports/$importJobId/retry': typeof ApiImportsImportJobIdRetryRoute
   '/api/intake/$intakeId/complete': typeof ApiIntakeIntakeIdCompleteRoute
   '/api/intake/$intakeId/skip': typeof ApiIntakeIntakeIdSkipRoute
@@ -177,16 +215,21 @@ export interface FileRoutesByTo {
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/_auth': typeof AuthRouteWithChildren
   '/components': typeof ComponentsRoute
+  '/_auth/login': typeof AuthLoginRoute
+  '/_auth/signup': typeof AuthSignupRoute
   '/api/imports': typeof ApiImportsRouteWithChildren
   '/api/intake': typeof ApiIntakeRouteWithChildren
   '/api/records': typeof ApiRecordsRouteWithChildren
   '/api/review-tasks': typeof ApiReviewTasksRouteWithChildren
   '/api/shares': typeof ApiSharesRouteWithChildren
+  '/documents/intake': typeof DocumentsIntakeRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/imports/$importJobId': typeof ApiImportsImportJobIdRouteWithChildren
   '/api/intake/$intakeId': typeof ApiIntakeIntakeIdRouteWithChildren
   '/api/review-tasks/$reviewTaskId': typeof ApiReviewTasksReviewTaskIdRouteWithChildren
+  '/api/imports/$importJobId/document': typeof ApiImportsImportJobIdDocumentRoute
   '/api/imports/$importJobId/retry': typeof ApiImportsImportJobIdRetryRoute
   '/api/intake/$intakeId/complete': typeof ApiIntakeIntakeIdCompleteRoute
   '/api/intake/$intakeId/skip': typeof ApiIntakeIntakeIdSkipRoute
@@ -201,15 +244,19 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/components'
+    | '/login'
+    | '/signup'
     | '/api/imports'
     | '/api/intake'
     | '/api/records'
     | '/api/review-tasks'
     | '/api/shares'
+    | '/documents/intake'
     | '/api/auth/$'
     | '/api/imports/$importJobId'
     | '/api/intake/$intakeId'
     | '/api/review-tasks/$reviewTaskId'
+    | '/api/imports/$importJobId/document'
     | '/api/imports/$importJobId/retry'
     | '/api/intake/$intakeId/complete'
     | '/api/intake/$intakeId/skip'
@@ -222,15 +269,19 @@ export interface FileRouteTypes {
   to:
     | '/'
     | '/components'
+    | '/login'
+    | '/signup'
     | '/api/imports'
     | '/api/intake'
     | '/api/records'
     | '/api/review-tasks'
     | '/api/shares'
+    | '/documents/intake'
     | '/api/auth/$'
     | '/api/imports/$importJobId'
     | '/api/intake/$intakeId'
     | '/api/review-tasks/$reviewTaskId'
+    | '/api/imports/$importJobId/document'
     | '/api/imports/$importJobId/retry'
     | '/api/intake/$intakeId/complete'
     | '/api/intake/$intakeId/skip'
@@ -242,16 +293,21 @@ export interface FileRouteTypes {
   id:
     | '__root__'
     | '/'
+    | '/_auth'
     | '/components'
+    | '/_auth/login'
+    | '/_auth/signup'
     | '/api/imports'
     | '/api/intake'
     | '/api/records'
     | '/api/review-tasks'
     | '/api/shares'
+    | '/documents/intake'
     | '/api/auth/$'
     | '/api/imports/$importJobId'
     | '/api/intake/$intakeId'
     | '/api/review-tasks/$reviewTaskId'
+    | '/api/imports/$importJobId/document'
     | '/api/imports/$importJobId/retry'
     | '/api/intake/$intakeId/complete'
     | '/api/intake/$intakeId/skip'
@@ -264,12 +320,14 @@ export interface FileRouteTypes {
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  AuthRoute: typeof AuthRouteWithChildren
   ComponentsRoute: typeof ComponentsRoute
   ApiImportsRoute: typeof ApiImportsRouteWithChildren
   ApiIntakeRoute: typeof ApiIntakeRouteWithChildren
   ApiRecordsRoute: typeof ApiRecordsRouteWithChildren
   ApiReviewTasksRoute: typeof ApiReviewTasksRouteWithChildren
   ApiSharesRoute: typeof ApiSharesRouteWithChildren
+  DocumentsIntakeRoute: typeof DocumentsIntakeRoute
   ApiAuthSplatRoute: typeof ApiAuthSplatRoute
   ApiSharedSharePolicyIdObservationsRoute: typeof ApiSharedSharePolicyIdObservationsRoute
 }
@@ -283,11 +341,25 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ComponentsRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/_auth': {
+      id: '/_auth'
+      path: ''
+      fullPath: '/'
+      preLoaderRoute: typeof AuthRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/': {
       id: '/'
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/documents/intake': {
+      id: '/documents/intake'
+      path: '/documents/intake'
+      fullPath: '/documents/intake'
+      preLoaderRoute: typeof DocumentsIntakeRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/shares': {
@@ -324,6 +396,20 @@ declare module '@tanstack/react-router' {
       fullPath: '/api/imports'
       preLoaderRoute: typeof ApiImportsRouteImport
       parentRoute: typeof rootRouteImport
+    }
+    '/_auth/signup': {
+      id: '/_auth/signup'
+      path: '/signup'
+      fullPath: '/signup'
+      preLoaderRoute: typeof AuthSignupRouteImport
+      parentRoute: typeof AuthRoute
+    }
+    '/_auth/login': {
+      id: '/_auth/login'
+      path: '/login'
+      fullPath: '/login'
+      preLoaderRoute: typeof AuthLoginRouteImport
+      parentRoute: typeof AuthRoute
     }
     '/api/review-tasks/$reviewTaskId': {
       id: '/api/review-tasks/$reviewTaskId'
@@ -402,6 +488,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiImportsImportJobIdRetryRouteImport
       parentRoute: typeof ApiImportsImportJobIdRoute
     }
+    '/api/imports/$importJobId/document': {
+      id: '/api/imports/$importJobId/document'
+      path: '/document'
+      fullPath: '/api/imports/$importJobId/document'
+      preLoaderRoute: typeof ApiImportsImportJobIdDocumentRouteImport
+      parentRoute: typeof ApiImportsImportJobIdRoute
+    }
     '/api/records/$resourceType/$resourceId/action': {
       id: '/api/records/$resourceType/$resourceId/action'
       path: '/$resourceType/$resourceId/action'
@@ -412,11 +505,25 @@ declare module '@tanstack/react-router' {
   }
 }
 
+interface AuthRouteChildren {
+  AuthLoginRoute: typeof AuthLoginRoute
+  AuthSignupRoute: typeof AuthSignupRoute
+}
+
+const AuthRouteChildren: AuthRouteChildren = {
+  AuthLoginRoute: AuthLoginRoute,
+  AuthSignupRoute: AuthSignupRoute,
+}
+
+const AuthRouteWithChildren = AuthRoute._addFileChildren(AuthRouteChildren)
+
 interface ApiImportsImportJobIdRouteChildren {
+  ApiImportsImportJobIdDocumentRoute: typeof ApiImportsImportJobIdDocumentRoute
   ApiImportsImportJobIdRetryRoute: typeof ApiImportsImportJobIdRetryRoute
 }
 
 const ApiImportsImportJobIdRouteChildren: ApiImportsImportJobIdRouteChildren = {
+  ApiImportsImportJobIdDocumentRoute: ApiImportsImportJobIdDocumentRoute,
   ApiImportsImportJobIdRetryRoute: ApiImportsImportJobIdRetryRoute,
 }
 
@@ -518,12 +625,14 @@ const ApiSharesRouteWithChildren = ApiSharesRoute._addFileChildren(
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  AuthRoute: AuthRouteWithChildren,
   ComponentsRoute: ComponentsRoute,
   ApiImportsRoute: ApiImportsRouteWithChildren,
   ApiIntakeRoute: ApiIntakeRouteWithChildren,
   ApiRecordsRoute: ApiRecordsRouteWithChildren,
   ApiReviewTasksRoute: ApiReviewTasksRouteWithChildren,
   ApiSharesRoute: ApiSharesRouteWithChildren,
+  DocumentsIntakeRoute: DocumentsIntakeRoute,
   ApiAuthSplatRoute: ApiAuthSplatRoute,
   ApiSharedSharePolicyIdObservationsRoute:
     ApiSharedSharePolicyIdObservationsRoute,

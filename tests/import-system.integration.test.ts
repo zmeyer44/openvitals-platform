@@ -2,8 +2,9 @@ import { Buffer } from "node:buffer";
 import { mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { Pool } from "pg";
 import { createDb, type OpenVitalsDatabase } from "../packages/database/src/client";
 import {
@@ -161,6 +162,10 @@ describeWithDatabase("import system v1 integration", () => {
     const owner = await createOwner();
     const { createImport, getImportDetail } = await import("../apps/web/src/server/imports");
     const { processImportJob } = await import("../packages/ingestion/src/importPipeline");
+    const { labCsvParser } = await import("../packages/ingestion/src/parsers/labCsvParser");
+    const { pdfPlaceholderParser, imagePlaceholderParser } = await import(
+      "../packages/ingestion/src/parsers/reviewPlaceholderParsers"
+    );
 
     const created = await createImport(db, {
       owner,
@@ -175,7 +180,8 @@ describeWithDatabase("import system v1 integration", () => {
       db,
       importJobId: created.importJobId,
       objectStore: createLocalObjectStore(objectStorageRoot),
-      workerId: "worker-import-v1"
+      workerId: "worker-import-v1",
+      parsers: [labCsvParser, pdfPlaceholderParser, imagePlaceholderParser]
     });
 
     expect(result).toMatchObject({
@@ -201,6 +207,130 @@ describeWithDatabase("import system v1 integration", () => {
     expect(selected?.parserName).toBe(file.selectedParser);
     expect(selected?.decision).toBe("review_needed");
     expect(detail?.classifications.every((classification) => classification.decision !== "error")).toBe(true);
+  });
+
+  it("materializes AI-extracted observations from a PDF when the lab pdf parser succeeds", async () => {
+    const owner = await createOwner();
+    const { createImport, getImportDetail } = await import("../apps/web/src/server/imports");
+    const { processImportJob } = await import("../packages/ingestion/src/importPipeline");
+    const { labCsvParser } = await import("../packages/ingestion/src/parsers/labCsvParser");
+    const { createLabPdfParser } = await import("../packages/ingestion/src/parsers/labPdfParser");
+    const { pdfPlaceholderParser, imagePlaceholderParser } = await import(
+      "../packages/ingestion/src/parsers/reviewPlaceholderParsers"
+    );
+
+    const labPdfParser = createLabPdfParser({
+      extract: async () => ({
+        observations: [
+          {
+            displayName: "Hemoglobin",
+            valueRaw: "13.2",
+            valueNumeric: 13.2,
+            unitOriginal: "g/dL",
+            observedAt: "2024-04-01",
+            referenceRangeLow: 12,
+            referenceRangeHigh: 17,
+            interpretation: null,
+            category: "labs",
+            sourcePage: 2,
+            sourceText: "Hemoglobin 13.2 g/dL",
+            confidence: 0.95
+          }
+        ],
+        documentNotes: null,
+        modelUsed: "anthropic/claude-sonnet-4.6",
+        promptVersion: "test"
+      })
+    });
+
+    const created = await createImport(db, {
+      owner,
+      fileName: "ai-labs.pdf",
+      mimeType: "application/pdf",
+      content: Buffer.from("%PDF-1.4\nfake\n"),
+      idempotencyKey: "import-v1:ai-pdf",
+      objectStorageRoot
+    });
+
+    const result = await processImportJob({
+      db,
+      importJobId: created.importJobId,
+      objectStore: createLocalObjectStore(objectStorageRoot),
+      workerId: "worker-import-v1",
+      parsers: [labCsvParser, labPdfParser, pdfPlaceholderParser, imagePlaceholderParser]
+    });
+
+    expect(result).toMatchObject({
+      status: "completed",
+      sourceRecordCount: 1,
+      canonicalRecordCount: 1,
+      reviewTaskCount: 0
+    });
+
+    const detail = await getImportDetail(db, { owner, importJobId: created.importJobId });
+    expect(detail?.importJob.status).toBe("completed");
+    expect(detail?.sourceRecords[0]?.sourceText).toBe("Hemoglobin 13.2 g/dL");
+    expect(detail?.canonicalRecords).toHaveLength(1);
+
+    const selected = detail?.classifications.find((classification) => classification.selected);
+    expect(selected?.parserName).toBe("openvitals.lab_pdf");
+
+    const [observation] = await db
+      .select()
+      .from(observations)
+      .where(eq(observations.ownerUserId, owner.ownerUserId));
+    expect(observation?.displayName).toBe("Hemoglobin");
+    expect(observation?.trustLevel).toBe("ai_extracted");
+  });
+
+  it("falls back to the placeholder when the lab pdf extractor returns no observations", async () => {
+    const owner = await createOwner();
+    const { createImport, getImportDetail } = await import("../apps/web/src/server/imports");
+    const { processImportJob } = await import("../packages/ingestion/src/importPipeline");
+    const { labCsvParser } = await import("../packages/ingestion/src/parsers/labCsvParser");
+    const { createLabPdfParser } = await import("../packages/ingestion/src/parsers/labPdfParser");
+    const { pdfPlaceholderParser, imagePlaceholderParser } = await import(
+      "../packages/ingestion/src/parsers/reviewPlaceholderParsers"
+    );
+
+    const labPdfParser = createLabPdfParser({
+      extract: async () => ({
+        observations: [],
+        documentNotes: "Not a lab report.",
+        modelUsed: "anthropic/claude-sonnet-4.6",
+        promptVersion: "test"
+      })
+    });
+
+    const created = await createImport(db, {
+      owner,
+      fileName: "no-labs.pdf",
+      mimeType: "application/pdf",
+      content: Buffer.from("%PDF-1.4\nfake\n"),
+      idempotencyKey: "import-v1:ai-pdf-empty",
+      objectStorageRoot
+    });
+
+    const result = await processImportJob({
+      db,
+      importJobId: created.importJobId,
+      objectStore: createLocalObjectStore(objectStorageRoot),
+      workerId: "worker-import-v1",
+      parsers: [labCsvParser, labPdfParser, pdfPlaceholderParser, imagePlaceholderParser]
+    });
+
+    expect(result).toMatchObject({
+      status: "needs_review",
+      sourceRecordCount: 1,
+      canonicalRecordCount: 0,
+      reviewTaskCount: 1
+    });
+
+    const detail = await getImportDetail(db, { owner, importJobId: created.importJobId });
+    expect(detail?.reviewTasks[0]?.reason).toBe("pdf_extraction_failed");
+    expect(detail?.sourceRecords[0]?.recordType).toBe("note");
+    const selected = detail?.classifications.find((classification) => classification.selected);
+    expect(selected?.parserName).toBe("openvitals.lab_pdf");
   });
 
   it("stores explicit unsupported parser decisions and keeps unsupported files in review", async () => {
@@ -348,10 +478,15 @@ describeWithDatabase("import system v1 integration", () => {
     expect(jobs).toHaveLength(1);
   });
 
-  it("clears prior pipeline output before requeueing a retried import", async () => {
+  it("retains and supersedes prior pipeline output before requeueing a retried import", async () => {
     const owner = await createOwner();
     const { createImport, getImportDetail, retryImport } = await import("../apps/web/src/server/imports");
     const { processImportJob } = await import("../packages/ingestion/src/importPipeline");
+    const { labCsvParser } = await import("../packages/ingestion/src/parsers/labCsvParser");
+    const { pdfPlaceholderParser, imagePlaceholderParser } = await import(
+      "../packages/ingestion/src/parsers/reviewPlaceholderParsers"
+    );
+    const placeholderParsers = [labCsvParser, pdfPlaceholderParser, imagePlaceholderParser];
 
     const created = await createImport(db, {
       owner,
@@ -366,13 +501,16 @@ describeWithDatabase("import system v1 integration", () => {
       db,
       importJobId: created.importJobId,
       objectStore: createLocalObjectStore(objectStorageRoot),
-      workerId: "worker-import-v1"
+      workerId: "worker-import-v1",
+      parsers: placeholderParsers
     });
 
     const beforeRetry = await getImportDetail(db, { owner, importJobId: created.importJobId });
     expect(beforeRetry?.classifications.length).toBeGreaterThan(0);
     expect(beforeRetry?.sourceRecords.length).toBeGreaterThan(0);
     expect(beforeRetry?.reviewTasks.length).toBeGreaterThan(0);
+    const originalSourceRecordIds = beforeRetry?.sourceRecords.map((record) => record.id) ?? [];
+    const originalReviewTaskIds = beforeRetry?.reviewTasks.map((task) => task.id) ?? [];
 
     await db
       .update(importJobs)
@@ -382,9 +520,12 @@ describeWithDatabase("import system v1 integration", () => {
     await retryImport(db, { owner, importJobId: created.importJobId });
 
     const afterRetry = await getImportDetail(db, { owner, importJobId: created.importJobId });
-    expect(afterRetry?.classifications).toHaveLength(0);
-    expect(afterRetry?.sourceRecords).toHaveLength(0);
-    expect(afterRetry?.reviewTasks).toHaveLength(0);
+    expect(afterRetry?.classifications).toHaveLength(beforeRetry?.classifications.length ?? 0);
+    expect(afterRetry?.sourceRecords.map((record) => record.id)).toEqual(originalSourceRecordIds);
+    expect(afterRetry?.sourceRecords.every((record) => record.reviewState === "ignored")).toBe(true);
+    expect(afterRetry?.reviewTasks.map((task) => task.id)).toEqual(originalReviewTaskIds);
+    expect(afterRetry?.reviewTasks.every((task) => task.status === "dismissed")).toBe(true);
+    expect(afterRetry?.classifications.every((classification) => classification.selected === false)).toBe(true);
     expect(afterRetry?.importJob.status).toBe("uploaded");
     expect(afterRetry?.queueJob?.status).toBe("available");
     expect(afterRetry?.history.at(-1)?.reason).toBe("manual_retry");
@@ -393,14 +534,21 @@ describeWithDatabase("import system v1 integration", () => {
       db,
       importJobId: created.importJobId,
       objectStore: createLocalObjectStore(objectStorageRoot),
-      workerId: "worker-import-v1"
+      workerId: "worker-import-v1",
+      parsers: placeholderParsers
     });
     expect(reprocessed.status).toBe("needs_review");
 
     const afterRerun = await getImportDetail(db, { owner, importJobId: created.importJobId });
-    expect(afterRerun?.classifications).toHaveLength(beforeRetry?.classifications.length ?? 0);
-    expect(afterRerun?.sourceRecords).toHaveLength(beforeRetry?.sourceRecords.length ?? 0);
-    expect(afterRerun?.reviewTasks).toHaveLength(beforeRetry?.reviewTasks.length ?? 0);
+    expect(afterRerun?.classifications).toHaveLength((beforeRetry?.classifications.length ?? 0) * 2);
+    expect(afterRerun?.sourceRecords).toHaveLength((beforeRetry?.sourceRecords.length ?? 0) * 2);
+    expect(afterRerun?.reviewTasks).toHaveLength((beforeRetry?.reviewTasks.length ?? 0) * 2);
+    expect(afterRerun?.sourceRecords.filter((record) => record.reviewState === "ignored")).toHaveLength(
+      beforeRetry?.sourceRecords.length ?? 0
+    );
+    expect(afterRerun?.reviewTasks.filter((task) => task.status === "dismissed")).toHaveLength(
+      beforeRetry?.reviewTasks.length ?? 0
+    );
   });
 
   it("refuses to retry imports that have materialized canonical records", async () => {
@@ -482,6 +630,66 @@ describeWithDatabase("import system v1 integration", () => {
     await expect(
       retryImport(db, { owner, importJobId: created.importJobId })
     ).rejects.toMatchObject({ status: 409, code: "import_in_flight" });
+  });
+
+  it("marks import domain status failed when the worker catches an unexpected pipeline error", async () => {
+    const owner = await createOwner();
+    const { createImport, getImportDetail } = await import("../apps/web/src/server/imports");
+    const { runImportWorkerLoop } = await import("../packages/workers/src/importWorker");
+
+    const created = await createImport(db, {
+      owner,
+      fileName: "missing-object.csv",
+      mimeType: "text/csv",
+      content: Buffer.from("test_name,value,unit\nHemoglobin,13.2,g/dL\n"),
+      idempotencyKey: "import-v1:worker-error",
+      objectStorageRoot
+    });
+
+    await createLocalObjectStore(objectStorageRoot).delete(created.objectKey);
+
+    const previousRoot = process.env.OPENVITALS_OBJECT_STORAGE_ROOT;
+    process.env.OPENVITALS_OBJECT_STORAGE_ROOT = objectStorageRoot;
+    const controller = new AbortController();
+    const workerPromise = runImportWorkerLoop({
+      db,
+      workerId: "worker-import-v1-error",
+      signal: controller.signal,
+      pollIntervalMs: 10
+    });
+
+    try {
+      let detail = await getImportDetail(db, { owner, importJobId: created.importJobId });
+      for (
+        let attempt = 0;
+        attempt < 50 && (detail?.queueJob?.status !== "retryable" || detail.importJob.status !== "failed");
+        attempt += 1
+      ) {
+        await delay(20);
+        detail = await getImportDetail(db, { owner, importJobId: created.importJobId });
+      }
+
+      expect(detail?.queueJob?.status).toBe("retryable");
+      expect(detail?.importJob.status).toBe("failed");
+      expect(detail?.importJob.errorCode).toBe("worker_error");
+      expect(detail?.sourceDocument.status).toBe("failed");
+      expect(detail?.history.at(-1)?.reason).toBe("worker_error");
+
+      const [failedEvent] = await db
+        .select()
+        .from(outboxEvents)
+        .where(and(eq(outboxEvents.aggregateId, created.importJobId), eq(outboxEvents.eventType, "import.failed")))
+        .limit(1);
+      expect(failedEvent?.eventType).toBe("import.failed");
+    } finally {
+      controller.abort();
+      await workerPromise;
+      if (previousRoot === undefined) {
+        delete process.env.OPENVITALS_OBJECT_STORAGE_ROOT;
+      } else {
+        process.env.OPENVITALS_OBJECT_STORAGE_ROOT = previousRoot;
+      }
+    }
   });
 
   it("rejects multipart uploads larger than the configured byte cap", async () => {

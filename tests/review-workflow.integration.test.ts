@@ -555,6 +555,13 @@ describeWithDatabase("review workflow backend integration", () => {
       .limit(1);
     expect(updated?.reviewState).toBe("confirmed");
     expect(updated?.trustLevel).toBe("user_confirmed");
+
+    const [updatedSource] = await db
+      .select()
+      .from(sourceRecords)
+      .where(eq(sourceRecords.id, sourcePair.record.id))
+      .limit(1);
+    expect(updatedSource?.reviewState).toBe("confirmed");
   });
 
   it("resolves a source-document review task without writing record revisions", async () => {

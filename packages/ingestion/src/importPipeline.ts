@@ -13,15 +13,16 @@ import {
 import { sha256Hex, workerActor, type Actor } from "@openvitals/domain";
 import { enqueueOutboxEvent, writeAuditEvent } from "@openvitals/events";
 import type { HealthDataParser, ImportFile, MaterializeResult } from "./contracts";
-import type { ObjectStore } from "./objectStore";
+import type { ObjectStore, ObjectStoreResolver } from "./objectStore";
 import { createParserRegistry } from "./parserRegistry";
 import { labCsvParser } from "./parsers/labCsvParser";
+import { labPdfParser } from "./parsers/labPdfParser";
 import { imagePlaceholderParser, pdfPlaceholderParser } from "./parsers/reviewPlaceholderParsers";
 
 export type ProcessImportJobInput = {
   db: OpenVitalsDatabase;
   importJobId: string;
-  objectStore: ObjectStore;
+  objectStore: ObjectStore | ObjectStoreResolver;
   workerId: string;
   parsers?: HealthDataParser[];
 };
@@ -30,7 +31,11 @@ export type ProcessImportJobResult = MaterializeResult & {
   status: "completed" | "needs_review" | "failed";
 };
 
-const defaultParsers = [labCsvParser, pdfPlaceholderParser, imagePlaceholderParser];
+const aiPdfExtractionEnabled = Boolean(process.env.AI_GATEWAY_API_KEY);
+
+const defaultParsers: HealthDataParser[] = aiPdfExtractionEnabled
+  ? [labCsvParser, labPdfParser, pdfPlaceholderParser, imagePlaceholderParser]
+  : [labCsvParser, pdfPlaceholderParser, imagePlaceholderParser];
 
 type StatusTransitionInput = {
   importJobId: string;
@@ -209,7 +214,11 @@ export async function processImportJob(input: ProcessImportJobInput): Promise<Pr
     });
   });
 
-  const bytes = await input.objectStore.read(blob.objectKey);
+  const objectStore =
+    typeof input.objectStore === "function"
+      ? input.objectStore({ storageProvider: blob.storageProvider })
+      : input.objectStore;
+  const bytes = await objectStore.read(blob.objectKey);
   const sha256 = sha256Hex(bytes);
   if (sha256 !== blob.sha256) {
     await markImportFailed(input.db, {

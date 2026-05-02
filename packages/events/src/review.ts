@@ -457,6 +457,7 @@ export async function applyReviewAction(
     if (!canonicalRecord) {
       throw new ReviewActionError(404, "resource_not_found", "Canonical record not found.");
     }
+    sourceRecordId = canonicalRecord.sourceRecordId;
 
     const previousValue = snapshot(canonicalRecord);
     const table = canonicalTableFor(canonicalType);

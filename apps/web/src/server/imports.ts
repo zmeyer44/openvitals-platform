@@ -1,6 +1,6 @@
 import { Buffer } from "node:buffer";
 import { randomUUID } from "node:crypto";
-import { and, asc, desc, eq, inArray, isNull } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import {
   appendImportStatusHistory,
   blobObjects,
@@ -23,8 +23,29 @@ import {
   type OpenVitalsDatabase
 } from "@openvitals/database";
 import { buildSourceDocumentObjectKey, sha256Hex } from "@openvitals/domain";
-import { createLocalObjectStore } from "@openvitals/ingestion";
+import {
+  createLocalObjectStore,
+  createObjectStoreFromEnv,
+  createObjectStoreResolverFromEnv,
+  type ObjectStore,
+  type ObjectStoreResolver
+} from "@openvitals/ingestion";
 import type { AuthenticatedOwnerContext } from "./ownership";
+
+function resolveWriteObjectStore(objectStorageRoot: string | undefined): ObjectStore {
+  if (objectStorageRoot) {
+    return createLocalObjectStore(objectStorageRoot);
+  }
+  return createObjectStoreFromEnv();
+}
+
+function resolveReadObjectStoreResolver(objectStorageRoot: string | undefined): ObjectStoreResolver {
+  if (objectStorageRoot) {
+    const localStore = createLocalObjectStore(objectStorageRoot);
+    return () => localStore;
+  }
+  return createObjectStoreResolverFromEnv();
+}
 
 export type CreateImportInput = {
   owner: Pick<AuthenticatedOwnerContext, "ownerUserId" | "actor">;
@@ -40,6 +61,20 @@ export type CreateImportResult = {
   sourceDocumentId: string;
   importJobId: string;
   objectKey: string;
+};
+
+export type ImportCanonicalRecord =
+  | { resourceType: "observation"; record: typeof observations.$inferSelect }
+  | { resourceType: "condition"; record: typeof conditions.$inferSelect }
+  | { resourceType: "medication"; record: typeof medications.$inferSelect }
+  | { resourceType: "encounter"; record: typeof encounters.$inferSelect };
+
+export type ImportDocumentBlob = {
+  bytes: Buffer;
+  mimeType: string;
+  fileName: string;
+  objectKey: string;
+  sha256: string;
 };
 
 export class ImportApiError extends Error {
@@ -171,9 +206,7 @@ export async function createImport(
     sha256,
     fileName: input.fileName
   });
-  const objectStore = createLocalObjectStore(
-    input.objectStorageRoot ?? process.env.OPENVITALS_OBJECT_STORAGE_ROOT ?? ".data/blobs"
-  );
+  const objectStore = resolveWriteObjectStore(input.objectStorageRoot);
 
   await objectStore.write(objectKey, bytes);
 
@@ -201,6 +234,7 @@ export async function createImport(
         .values({
           ownerUserId,
           objectKey,
+          storageProvider: objectStore.provider,
           sha256,
           mimeType: input.mimeType,
           byteSize: bytes.length
@@ -208,6 +242,7 @@ export async function createImport(
         .onConflictDoUpdate({
           target: blobObjects.objectKey,
           set: {
+            storageProvider: objectStore.provider,
             mimeType: input.mimeType,
             byteSize: bytes.length,
             updatedAt: new Date()
@@ -397,6 +432,39 @@ export async function getImportDetail(
     .orderBy(asc(sourceRecords.createdAt));
 
   const recordIds = records.map((record) => record.id);
+  const canonicalRecords: ImportCanonicalRecord[] =
+    recordIds.length > 0
+      ? [
+          ...(
+            await db
+              .select()
+              .from(observations)
+              .where(and(eq(observations.ownerUserId, input.owner.ownerUserId), inArray(observations.sourceRecordId, recordIds)))
+              .orderBy(asc(observations.createdAt))
+          ).map((record) => ({ resourceType: "observation" as const, record })),
+          ...(
+            await db
+              .select()
+              .from(conditions)
+              .where(and(eq(conditions.ownerUserId, input.owner.ownerUserId), inArray(conditions.sourceRecordId, recordIds)))
+              .orderBy(asc(conditions.createdAt))
+          ).map((record) => ({ resourceType: "condition" as const, record })),
+          ...(
+            await db
+              .select()
+              .from(medications)
+              .where(and(eq(medications.ownerUserId, input.owner.ownerUserId), inArray(medications.sourceRecordId, recordIds)))
+              .orderBy(asc(medications.createdAt))
+          ).map((record) => ({ resourceType: "medication" as const, record })),
+          ...(
+            await db
+              .select()
+              .from(encounters)
+              .where(and(eq(encounters.ownerUserId, input.owner.ownerUserId), inArray(encounters.sourceRecordId, recordIds)))
+              .orderBy(asc(encounters.createdAt))
+          ).map((record) => ({ resourceType: "encounter" as const, record }))
+        ]
+      : [];
   const documentReviewTasks = await db
     .select()
     .from(reviewTasks)
@@ -424,8 +492,57 @@ export async function getImportDetail(
     classifications,
     history,
     sourceRecords: records,
+    canonicalRecords,
     reviewTasks: [...reviewTaskById.values()],
     queueJob: queueJob ?? null
+  };
+}
+
+export async function getImportDocumentBlob(
+  db: OpenVitalsDatabase,
+  input: {
+    owner: Pick<AuthenticatedOwnerContext, "ownerUserId">;
+    importJobId: string;
+    objectStorageRoot?: string | undefined;
+  }
+): Promise<ImportDocumentBlob | null> {
+  const [row] = await db
+    .select({
+      document: sourceDocuments,
+      blob: blobObjects
+    })
+    .from(importJobs)
+    .innerJoin(
+      sourceDocuments,
+      and(
+        eq(sourceDocuments.id, importJobs.sourceDocumentId),
+        eq(sourceDocuments.ownerUserId, importJobs.ownerUserId)
+      )
+    )
+    .innerJoin(
+      blobObjects,
+      and(
+        eq(blobObjects.id, sourceDocuments.blobObjectId),
+        eq(blobObjects.ownerUserId, importJobs.ownerUserId)
+      )
+    )
+    .where(and(eq(importJobs.ownerUserId, input.owner.ownerUserId), eq(importJobs.id, input.importJobId)))
+    .limit(1);
+
+  if (!row) {
+    return null;
+  }
+
+  const objectStore = resolveReadObjectStoreResolver(input.objectStorageRoot)({
+    storageProvider: row.blob.storageProvider
+  });
+
+  return {
+    bytes: await objectStore.read(row.blob.objectKey),
+    mimeType: row.document.mimeType ?? row.blob.mimeType,
+    fileName: row.document.fileName ?? "source-document",
+    objectKey: row.blob.objectKey,
+    sha256: row.blob.sha256
   };
 }
 
@@ -467,24 +584,66 @@ export async function retryImport(
       const ownerUserId = input.owner.ownerUserId;
 
       await tx
-        .delete(reviewTasks)
+        .update(reviewTasks)
+        .set({
+          status: "dismissed",
+          resolutionAction: "ignore",
+          resolutionNote: "Superseded by manual import retry.",
+          resolvedByUserId: input.owner.actor.type === "user" ? input.owner.actor.id : null,
+          resolvedAt: now,
+          updatedAt: now
+        })
         .where(
           and(
             eq(reviewTasks.ownerUserId, ownerUserId),
             isNull(reviewTasks.sourceRecordId),
             eq(reviewTasks.resourceType, "source_document"),
-            eq(reviewTasks.resourceId, sourceDocumentId)
+            eq(reviewTasks.resourceId, sourceDocumentId),
+            eq(reviewTasks.status, "open")
           )
         );
 
-      await tx
-        .delete(sourceRecords)
-        .where(
-          and(eq(sourceRecords.ownerUserId, ownerUserId), eq(sourceRecords.importJobId, importJobId))
-        );
+      if (detail.sourceRecords.length > 0) {
+        const sourceRecordIds = detail.sourceRecords.map((record) => record.id);
+
+        await tx
+          .update(reviewTasks)
+          .set({
+            status: "dismissed",
+            resolutionAction: "ignore",
+            resolutionNote: "Superseded by manual import retry.",
+            resolvedByUserId: input.owner.actor.type === "user" ? input.owner.actor.id : null,
+            resolvedAt: now,
+            updatedAt: now
+          })
+          .where(
+            and(
+              eq(reviewTasks.ownerUserId, ownerUserId),
+              inArray(reviewTasks.sourceRecordId, sourceRecordIds),
+              eq(reviewTasks.status, "open")
+            )
+          );
+      }
 
       await tx
-        .delete(fileClassifications)
+        .update(sourceRecords)
+        .set({
+          reviewState: "ignored",
+          updatedAt: now
+        })
+        .where(and(eq(sourceRecords.ownerUserId, ownerUserId), eq(sourceRecords.importJobId, importJobId)));
+
+      const retryMetadata = {
+        supersededByRetryAt: now.toISOString(),
+        supersededByRetryImportJobId: importJobId
+      };
+
+      await tx
+        .update(fileClassifications)
+        .set({
+          selected: false,
+          metadata: sql`${fileClassifications.metadata} || ${JSON.stringify(retryMetadata)}::jsonb`
+        })
         .where(
           and(
             eq(fileClassifications.ownerUserId, ownerUserId),

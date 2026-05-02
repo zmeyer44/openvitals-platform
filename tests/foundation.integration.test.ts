@@ -15,6 +15,8 @@ import {
   observations,
   outboxEvents,
   provenance,
+  recordRevisions,
+  reviewTasks,
   sharePolicies,
   sharePolicyScopes,
   sourceDocuments,
@@ -408,15 +410,83 @@ describeWithDatabase("OpenVitals foundation database integration", () => {
       pool.query(
         `
           insert into provenance (owner_user_id, resource_type, resource_id, actor_type, derivation)
-          values ($1, 'observation', gen_random_uuid(), 'system', 'unbacked')
+          values ($1, 'observation', $2, 'system', 'unbacked')
         `,
-        [owner.id]
+        [owner.id, observation.id]
       )
     ).rejects.toMatchObject({ code: "23514" });
 
     await expect(db.delete(sourceRecords).where(eq(sourceRecords.id, source.record.id))).rejects.toMatchObject({
       cause: { code: "23503" }
     });
+  });
+
+  it("enforces owner-scoped source and polymorphic resource references", async () => {
+    const owner = await createUser({ email: "owner-scope@example.test", displayName: "Owner Scope" });
+    const otherOwner = await createUser({ email: "other-scope@example.test", displayName: "Other Scope" });
+    const ownerSource = await createSource({ ownerUserId: owner.id });
+    const otherSource = await createSource({ ownerUserId: otherOwner.id });
+
+    await expect(
+      db.insert(observations).values({
+        ownerUserId: owner.id,
+        sourceRecordId: otherSource.record.id,
+        category: "labs",
+        displayName: "Cross-owner LDL",
+        reviewState: "needs_review"
+      })
+    ).rejects.toMatchObject({ cause: { code: "23503" } });
+
+    const [otherObservation] = await db
+      .insert(observations)
+      .values({
+        ownerUserId: otherOwner.id,
+        sourceRecordId: otherSource.record.id,
+        category: "labs",
+        displayName: "Other Owner A1c",
+        reviewState: "needs_review"
+      })
+      .returning();
+
+    if (!otherObservation) {
+      throw new Error("Expected other owner observation to be inserted");
+    }
+
+    await expect(
+      db.insert(provenance).values({
+        ownerUserId: owner.id,
+        resourceType: "observation",
+        resourceId: otherObservation.id,
+        sourceDocumentId: ownerSource.document.id,
+        sourceRecordId: ownerSource.record.id,
+        importJobId: ownerSource.job.id,
+        actorType: "worker",
+        actorId: "foundation-worker",
+        derivation: "normalized_from_source_record"
+      })
+    ).rejects.toMatchObject({ cause: { code: "23503" } });
+
+    await expect(
+      db.insert(reviewTasks).values({
+        ownerUserId: owner.id,
+        resourceType: "observation",
+        resourceId: otherObservation.id,
+        reason: "cross_owner_resource"
+      })
+    ).rejects.toMatchObject({ cause: { code: "23503" } });
+
+    await expect(
+      db.insert(recordRevisions).values({
+        ownerUserId: owner.id,
+        resourceType: "observation",
+        resourceId: otherObservation.id,
+        previousValue: {},
+        newValue: {},
+        reason: "cross_owner_resource",
+        actorType: "user",
+        actorId: owner.id
+      })
+    ).rejects.toMatchObject({ cause: { code: "23503" } });
   });
 
   it("enforces share predicates in SQL and records share access audit events", async () => {
@@ -530,6 +600,14 @@ describeWithDatabase("OpenVitals foundation database integration", () => {
 
     expect(outsiderRows).toHaveLength(0);
 
+    const missingIdentityRows = await listSharedObservations(db, {
+      policyId: policy.id,
+      actor: { type: "system", id: "share-test" },
+      now: new Date("2025-02-15T00:00:00Z")
+    } as unknown as Parameters<typeof listSharedObservations>[1]);
+
+    expect(missingIdentityRows).toHaveLength(0);
+
     const [shareAudit] = await db
       .select()
       .from(auditEvents)
@@ -558,6 +636,19 @@ describeWithDatabase("OpenVitals foundation database integration", () => {
       );
     expect(outsiderDeniedAudits).toHaveLength(1);
     expect(outsiderDeniedAudits[0]?.ownerUserId).toBe(owner.id);
+
+    const [missingIdentityDeniedAudit] = await db
+      .select()
+      .from(auditEvents)
+      .where(
+        and(
+          eq(auditEvents.action, "share.access_denied"),
+          eq(auditEvents.resourceId, policy.id),
+          eq(auditEvents.actorId, "share-test")
+        )
+      )
+      .limit(1);
+    expect(missingIdentityDeniedAudit?.ownerUserId).toBe(owner.id);
 
     await db.update(sharePolicies).set({ status: "revoked" }).where(eq(sharePolicies.id, policy.id));
 
