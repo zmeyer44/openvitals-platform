@@ -42,6 +42,20 @@ export type CreateImportResult = {
   objectKey: string;
 };
 
+export type ImportCanonicalRecord =
+  | { resourceType: "observation"; record: typeof observations.$inferSelect }
+  | { resourceType: "condition"; record: typeof conditions.$inferSelect }
+  | { resourceType: "medication"; record: typeof medications.$inferSelect }
+  | { resourceType: "encounter"; record: typeof encounters.$inferSelect };
+
+export type ImportDocumentBlob = {
+  bytes: Buffer;
+  mimeType: string;
+  fileName: string;
+  objectKey: string;
+  sha256: string;
+};
+
 export class ImportApiError extends Error {
   constructor(
     public readonly status: number,
@@ -397,6 +411,39 @@ export async function getImportDetail(
     .orderBy(asc(sourceRecords.createdAt));
 
   const recordIds = records.map((record) => record.id);
+  const canonicalRecords: ImportCanonicalRecord[] =
+    recordIds.length > 0
+      ? [
+          ...(
+            await db
+              .select()
+              .from(observations)
+              .where(and(eq(observations.ownerUserId, input.owner.ownerUserId), inArray(observations.sourceRecordId, recordIds)))
+              .orderBy(asc(observations.createdAt))
+          ).map((record) => ({ resourceType: "observation" as const, record })),
+          ...(
+            await db
+              .select()
+              .from(conditions)
+              .where(and(eq(conditions.ownerUserId, input.owner.ownerUserId), inArray(conditions.sourceRecordId, recordIds)))
+              .orderBy(asc(conditions.createdAt))
+          ).map((record) => ({ resourceType: "condition" as const, record })),
+          ...(
+            await db
+              .select()
+              .from(medications)
+              .where(and(eq(medications.ownerUserId, input.owner.ownerUserId), inArray(medications.sourceRecordId, recordIds)))
+              .orderBy(asc(medications.createdAt))
+          ).map((record) => ({ resourceType: "medication" as const, record })),
+          ...(
+            await db
+              .select()
+              .from(encounters)
+              .where(and(eq(encounters.ownerUserId, input.owner.ownerUserId), inArray(encounters.sourceRecordId, recordIds)))
+              .orderBy(asc(encounters.createdAt))
+          ).map((record) => ({ resourceType: "encounter" as const, record }))
+        ]
+      : [];
   const documentReviewTasks = await db
     .select()
     .from(reviewTasks)
@@ -424,8 +471,57 @@ export async function getImportDetail(
     classifications,
     history,
     sourceRecords: records,
+    canonicalRecords,
     reviewTasks: [...reviewTaskById.values()],
     queueJob: queueJob ?? null
+  };
+}
+
+export async function getImportDocumentBlob(
+  db: OpenVitalsDatabase,
+  input: {
+    owner: Pick<AuthenticatedOwnerContext, "ownerUserId">;
+    importJobId: string;
+    objectStorageRoot?: string | undefined;
+  }
+): Promise<ImportDocumentBlob | null> {
+  const [row] = await db
+    .select({
+      document: sourceDocuments,
+      blob: blobObjects
+    })
+    .from(importJobs)
+    .innerJoin(
+      sourceDocuments,
+      and(
+        eq(sourceDocuments.id, importJobs.sourceDocumentId),
+        eq(sourceDocuments.ownerUserId, importJobs.ownerUserId)
+      )
+    )
+    .innerJoin(
+      blobObjects,
+      and(
+        eq(blobObjects.id, sourceDocuments.blobObjectId),
+        eq(blobObjects.ownerUserId, importJobs.ownerUserId)
+      )
+    )
+    .where(and(eq(importJobs.ownerUserId, input.owner.ownerUserId), eq(importJobs.id, input.importJobId)))
+    .limit(1);
+
+  if (!row) {
+    return null;
+  }
+
+  const objectStore = createLocalObjectStore(
+    input.objectStorageRoot ?? process.env.OPENVITALS_OBJECT_STORAGE_ROOT ?? ".data/blobs"
+  );
+
+  return {
+    bytes: await objectStore.read(row.blob.objectKey),
+    mimeType: row.document.mimeType ?? row.blob.mimeType,
+    fileName: row.document.fileName ?? "source-document",
+    objectKey: row.blob.objectKey,
+    sha256: row.blob.sha256
   };
 }
 

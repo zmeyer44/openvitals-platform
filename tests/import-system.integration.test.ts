@@ -162,6 +162,10 @@ describeWithDatabase("import system v1 integration", () => {
     const owner = await createOwner();
     const { createImport, getImportDetail } = await import("../apps/web/src/server/imports");
     const { processImportJob } = await import("../packages/ingestion/src/importPipeline");
+    const { labCsvParser } = await import("../packages/ingestion/src/parsers/labCsvParser");
+    const { pdfPlaceholderParser, imagePlaceholderParser } = await import(
+      "../packages/ingestion/src/parsers/reviewPlaceholderParsers"
+    );
 
     const created = await createImport(db, {
       owner,
@@ -176,7 +180,8 @@ describeWithDatabase("import system v1 integration", () => {
       db,
       importJobId: created.importJobId,
       objectStore: createLocalObjectStore(objectStorageRoot),
-      workerId: "worker-import-v1"
+      workerId: "worker-import-v1",
+      parsers: [labCsvParser, pdfPlaceholderParser, imagePlaceholderParser]
     });
 
     expect(result).toMatchObject({
@@ -202,6 +207,130 @@ describeWithDatabase("import system v1 integration", () => {
     expect(selected?.parserName).toBe(file.selectedParser);
     expect(selected?.decision).toBe("review_needed");
     expect(detail?.classifications.every((classification) => classification.decision !== "error")).toBe(true);
+  });
+
+  it("materializes AI-extracted observations from a PDF when the lab pdf parser succeeds", async () => {
+    const owner = await createOwner();
+    const { createImport, getImportDetail } = await import("../apps/web/src/server/imports");
+    const { processImportJob } = await import("../packages/ingestion/src/importPipeline");
+    const { labCsvParser } = await import("../packages/ingestion/src/parsers/labCsvParser");
+    const { createLabPdfParser } = await import("../packages/ingestion/src/parsers/labPdfParser");
+    const { pdfPlaceholderParser, imagePlaceholderParser } = await import(
+      "../packages/ingestion/src/parsers/reviewPlaceholderParsers"
+    );
+
+    const labPdfParser = createLabPdfParser({
+      extract: async () => ({
+        observations: [
+          {
+            displayName: "Hemoglobin",
+            valueRaw: "13.2",
+            valueNumeric: 13.2,
+            unitOriginal: "g/dL",
+            observedAt: "2024-04-01",
+            referenceRangeLow: 12,
+            referenceRangeHigh: 17,
+            interpretation: null,
+            category: "labs",
+            sourcePage: 2,
+            sourceText: "Hemoglobin 13.2 g/dL",
+            confidence: 0.95
+          }
+        ],
+        documentNotes: null,
+        modelUsed: "anthropic/claude-sonnet-4.6",
+        promptVersion: "test"
+      })
+    });
+
+    const created = await createImport(db, {
+      owner,
+      fileName: "ai-labs.pdf",
+      mimeType: "application/pdf",
+      content: Buffer.from("%PDF-1.4\nfake\n"),
+      idempotencyKey: "import-v1:ai-pdf",
+      objectStorageRoot
+    });
+
+    const result = await processImportJob({
+      db,
+      importJobId: created.importJobId,
+      objectStore: createLocalObjectStore(objectStorageRoot),
+      workerId: "worker-import-v1",
+      parsers: [labCsvParser, labPdfParser, pdfPlaceholderParser, imagePlaceholderParser]
+    });
+
+    expect(result).toMatchObject({
+      status: "completed",
+      sourceRecordCount: 1,
+      canonicalRecordCount: 1,
+      reviewTaskCount: 0
+    });
+
+    const detail = await getImportDetail(db, { owner, importJobId: created.importJobId });
+    expect(detail?.importJob.status).toBe("completed");
+    expect(detail?.sourceRecords[0]?.sourceText).toBe("Hemoglobin 13.2 g/dL");
+    expect(detail?.canonicalRecords).toHaveLength(1);
+
+    const selected = detail?.classifications.find((classification) => classification.selected);
+    expect(selected?.parserName).toBe("openvitals.lab_pdf");
+
+    const [observation] = await db
+      .select()
+      .from(observations)
+      .where(eq(observations.ownerUserId, owner.ownerUserId));
+    expect(observation?.displayName).toBe("Hemoglobin");
+    expect(observation?.trustLevel).toBe("ai_extracted");
+  });
+
+  it("falls back to the placeholder when the lab pdf extractor returns no observations", async () => {
+    const owner = await createOwner();
+    const { createImport, getImportDetail } = await import("../apps/web/src/server/imports");
+    const { processImportJob } = await import("../packages/ingestion/src/importPipeline");
+    const { labCsvParser } = await import("../packages/ingestion/src/parsers/labCsvParser");
+    const { createLabPdfParser } = await import("../packages/ingestion/src/parsers/labPdfParser");
+    const { pdfPlaceholderParser, imagePlaceholderParser } = await import(
+      "../packages/ingestion/src/parsers/reviewPlaceholderParsers"
+    );
+
+    const labPdfParser = createLabPdfParser({
+      extract: async () => ({
+        observations: [],
+        documentNotes: "Not a lab report.",
+        modelUsed: "anthropic/claude-sonnet-4.6",
+        promptVersion: "test"
+      })
+    });
+
+    const created = await createImport(db, {
+      owner,
+      fileName: "no-labs.pdf",
+      mimeType: "application/pdf",
+      content: Buffer.from("%PDF-1.4\nfake\n"),
+      idempotencyKey: "import-v1:ai-pdf-empty",
+      objectStorageRoot
+    });
+
+    const result = await processImportJob({
+      db,
+      importJobId: created.importJobId,
+      objectStore: createLocalObjectStore(objectStorageRoot),
+      workerId: "worker-import-v1",
+      parsers: [labCsvParser, labPdfParser, pdfPlaceholderParser, imagePlaceholderParser]
+    });
+
+    expect(result).toMatchObject({
+      status: "needs_review",
+      sourceRecordCount: 1,
+      canonicalRecordCount: 0,
+      reviewTaskCount: 1
+    });
+
+    const detail = await getImportDetail(db, { owner, importJobId: created.importJobId });
+    expect(detail?.reviewTasks[0]?.reason).toBe("pdf_extraction_failed");
+    expect(detail?.sourceRecords[0]?.recordType).toBe("note");
+    const selected = detail?.classifications.find((classification) => classification.selected);
+    expect(selected?.parserName).toBe("openvitals.lab_pdf");
   });
 
   it("stores explicit unsupported parser decisions and keeps unsupported files in review", async () => {
@@ -353,6 +482,11 @@ describeWithDatabase("import system v1 integration", () => {
     const owner = await createOwner();
     const { createImport, getImportDetail, retryImport } = await import("../apps/web/src/server/imports");
     const { processImportJob } = await import("../packages/ingestion/src/importPipeline");
+    const { labCsvParser } = await import("../packages/ingestion/src/parsers/labCsvParser");
+    const { pdfPlaceholderParser, imagePlaceholderParser } = await import(
+      "../packages/ingestion/src/parsers/reviewPlaceholderParsers"
+    );
+    const placeholderParsers = [labCsvParser, pdfPlaceholderParser, imagePlaceholderParser];
 
     const created = await createImport(db, {
       owner,
@@ -367,7 +501,8 @@ describeWithDatabase("import system v1 integration", () => {
       db,
       importJobId: created.importJobId,
       objectStore: createLocalObjectStore(objectStorageRoot),
-      workerId: "worker-import-v1"
+      workerId: "worker-import-v1",
+      parsers: placeholderParsers
     });
 
     const beforeRetry = await getImportDetail(db, { owner, importJobId: created.importJobId });
@@ -399,7 +534,8 @@ describeWithDatabase("import system v1 integration", () => {
       db,
       importJobId: created.importJobId,
       objectStore: createLocalObjectStore(objectStorageRoot),
-      workerId: "worker-import-v1"
+      workerId: "worker-import-v1",
+      parsers: placeholderParsers
     });
     expect(reprocessed.status).toBe("needs_review");
 

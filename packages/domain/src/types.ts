@@ -119,4 +119,5 @@ export type ReviewReason =
   | "unsupported_format"
   | "empty_import"
   | "ambiguous_unit"
-  | "duplicate_candidate";
+  | "duplicate_candidate"
+  | "pdf_extraction_failed";

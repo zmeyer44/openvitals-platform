@@ -14,8 +14,10 @@
     "@openvitals/database": "workspace:*",
     "@openvitals/domain": "workspace:*",
     "@openvitals/events": "workspace:*",
+    "ai": "^6.0.174",
     "csv-parse": "^6.1.0",
     "drizzle-orm": "^0.45.1",
-    "kysely": "^0.28.16"
+    "kysely": "^0.28.16",
+    "zod": "^4.1.12"
   }
 }

@@ -33,8 +33,13 @@ function Home() {
         </p>
 
         <div className="mt-8 flex items-center gap-2">
+          <Link to="/documents/intake">
+            <Button variant="primary" size="lg" trailingIcon={<Plus />}>
+              Start document intake
+            </Button>
+          </Link>
           <Link to="/components">
-            <Button variant="primary" size="lg" trailingIcon={<ArrowRight />}>
+            <Button variant="secondary" size="lg" trailingIcon={<ArrowRight />}>
               Open components
             </Button>
           </Link>
