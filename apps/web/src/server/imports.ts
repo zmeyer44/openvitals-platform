@@ -1,6 +1,6 @@
 import { Buffer } from "node:buffer";
 import { randomUUID } from "node:crypto";
-import { and, asc, desc, eq, inArray, isNull } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import {
   appendImportStatusHistory,
   blobObjects,
@@ -467,24 +467,66 @@ export async function retryImport(
       const ownerUserId = input.owner.ownerUserId;
 
       await tx
-        .delete(reviewTasks)
+        .update(reviewTasks)
+        .set({
+          status: "dismissed",
+          resolutionAction: "ignore",
+          resolutionNote: "Superseded by manual import retry.",
+          resolvedByUserId: input.owner.actor.type === "user" ? input.owner.actor.id : null,
+          resolvedAt: now,
+          updatedAt: now
+        })
         .where(
           and(
             eq(reviewTasks.ownerUserId, ownerUserId),
             isNull(reviewTasks.sourceRecordId),
             eq(reviewTasks.resourceType, "source_document"),
-            eq(reviewTasks.resourceId, sourceDocumentId)
+            eq(reviewTasks.resourceId, sourceDocumentId),
+            eq(reviewTasks.status, "open")
           )
         );
 
-      await tx
-        .delete(sourceRecords)
-        .where(
-          and(eq(sourceRecords.ownerUserId, ownerUserId), eq(sourceRecords.importJobId, importJobId))
-        );
+      if (detail.sourceRecords.length > 0) {
+        const sourceRecordIds = detail.sourceRecords.map((record) => record.id);
+
+        await tx
+          .update(reviewTasks)
+          .set({
+            status: "dismissed",
+            resolutionAction: "ignore",
+            resolutionNote: "Superseded by manual import retry.",
+            resolvedByUserId: input.owner.actor.type === "user" ? input.owner.actor.id : null,
+            resolvedAt: now,
+            updatedAt: now
+          })
+          .where(
+            and(
+              eq(reviewTasks.ownerUserId, ownerUserId),
+              inArray(reviewTasks.sourceRecordId, sourceRecordIds),
+              eq(reviewTasks.status, "open")
+            )
+          );
+      }
 
       await tx
-        .delete(fileClassifications)
+        .update(sourceRecords)
+        .set({
+          reviewState: "ignored",
+          updatedAt: now
+        })
+        .where(and(eq(sourceRecords.ownerUserId, ownerUserId), eq(sourceRecords.importJobId, importJobId)));
+
+      const retryMetadata = {
+        supersededByRetryAt: now.toISOString(),
+        supersededByRetryImportJobId: importJobId
+      };
+
+      await tx
+        .update(fileClassifications)
+        .set({
+          selected: false,
+          metadata: sql`${fileClassifications.metadata} || ${JSON.stringify(retryMetadata)}::jsonb`
+        })
         .where(
           and(
             eq(fileClassifications.ownerUserId, ownerUserId),

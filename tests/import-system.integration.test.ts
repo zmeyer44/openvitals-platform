@@ -2,8 +2,9 @@ import { Buffer } from "node:buffer";
 import { mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { Pool } from "pg";
 import { createDb, type OpenVitalsDatabase } from "../packages/database/src/client";
 import {
@@ -348,7 +349,7 @@ describeWithDatabase("import system v1 integration", () => {
     expect(jobs).toHaveLength(1);
   });
 
-  it("clears prior pipeline output before requeueing a retried import", async () => {
+  it("retains and supersedes prior pipeline output before requeueing a retried import", async () => {
     const owner = await createOwner();
     const { createImport, getImportDetail, retryImport } = await import("../apps/web/src/server/imports");
     const { processImportJob } = await import("../packages/ingestion/src/importPipeline");
@@ -373,6 +374,8 @@ describeWithDatabase("import system v1 integration", () => {
     expect(beforeRetry?.classifications.length).toBeGreaterThan(0);
     expect(beforeRetry?.sourceRecords.length).toBeGreaterThan(0);
     expect(beforeRetry?.reviewTasks.length).toBeGreaterThan(0);
+    const originalSourceRecordIds = beforeRetry?.sourceRecords.map((record) => record.id) ?? [];
+    const originalReviewTaskIds = beforeRetry?.reviewTasks.map((task) => task.id) ?? [];
 
     await db
       .update(importJobs)
@@ -382,9 +385,12 @@ describeWithDatabase("import system v1 integration", () => {
     await retryImport(db, { owner, importJobId: created.importJobId });
 
     const afterRetry = await getImportDetail(db, { owner, importJobId: created.importJobId });
-    expect(afterRetry?.classifications).toHaveLength(0);
-    expect(afterRetry?.sourceRecords).toHaveLength(0);
-    expect(afterRetry?.reviewTasks).toHaveLength(0);
+    expect(afterRetry?.classifications).toHaveLength(beforeRetry?.classifications.length ?? 0);
+    expect(afterRetry?.sourceRecords.map((record) => record.id)).toEqual(originalSourceRecordIds);
+    expect(afterRetry?.sourceRecords.every((record) => record.reviewState === "ignored")).toBe(true);
+    expect(afterRetry?.reviewTasks.map((task) => task.id)).toEqual(originalReviewTaskIds);
+    expect(afterRetry?.reviewTasks.every((task) => task.status === "dismissed")).toBe(true);
+    expect(afterRetry?.classifications.every((classification) => classification.selected === false)).toBe(true);
     expect(afterRetry?.importJob.status).toBe("uploaded");
     expect(afterRetry?.queueJob?.status).toBe("available");
     expect(afterRetry?.history.at(-1)?.reason).toBe("manual_retry");
@@ -398,9 +404,15 @@ describeWithDatabase("import system v1 integration", () => {
     expect(reprocessed.status).toBe("needs_review");
 
     const afterRerun = await getImportDetail(db, { owner, importJobId: created.importJobId });
-    expect(afterRerun?.classifications).toHaveLength(beforeRetry?.classifications.length ?? 0);
-    expect(afterRerun?.sourceRecords).toHaveLength(beforeRetry?.sourceRecords.length ?? 0);
-    expect(afterRerun?.reviewTasks).toHaveLength(beforeRetry?.reviewTasks.length ?? 0);
+    expect(afterRerun?.classifications).toHaveLength((beforeRetry?.classifications.length ?? 0) * 2);
+    expect(afterRerun?.sourceRecords).toHaveLength((beforeRetry?.sourceRecords.length ?? 0) * 2);
+    expect(afterRerun?.reviewTasks).toHaveLength((beforeRetry?.reviewTasks.length ?? 0) * 2);
+    expect(afterRerun?.sourceRecords.filter((record) => record.reviewState === "ignored")).toHaveLength(
+      beforeRetry?.sourceRecords.length ?? 0
+    );
+    expect(afterRerun?.reviewTasks.filter((task) => task.status === "dismissed")).toHaveLength(
+      beforeRetry?.reviewTasks.length ?? 0
+    );
   });
 
   it("refuses to retry imports that have materialized canonical records", async () => {
@@ -482,6 +494,66 @@ describeWithDatabase("import system v1 integration", () => {
     await expect(
       retryImport(db, { owner, importJobId: created.importJobId })
     ).rejects.toMatchObject({ status: 409, code: "import_in_flight" });
+  });
+
+  it("marks import domain status failed when the worker catches an unexpected pipeline error", async () => {
+    const owner = await createOwner();
+    const { createImport, getImportDetail } = await import("../apps/web/src/server/imports");
+    const { runImportWorkerLoop } = await import("../packages/workers/src/importWorker");
+
+    const created = await createImport(db, {
+      owner,
+      fileName: "missing-object.csv",
+      mimeType: "text/csv",
+      content: Buffer.from("test_name,value,unit\nHemoglobin,13.2,g/dL\n"),
+      idempotencyKey: "import-v1:worker-error",
+      objectStorageRoot
+    });
+
+    await createLocalObjectStore(objectStorageRoot).delete(created.objectKey);
+
+    const previousRoot = process.env.OPENVITALS_OBJECT_STORAGE_ROOT;
+    process.env.OPENVITALS_OBJECT_STORAGE_ROOT = objectStorageRoot;
+    const controller = new AbortController();
+    const workerPromise = runImportWorkerLoop({
+      db,
+      workerId: "worker-import-v1-error",
+      signal: controller.signal,
+      pollIntervalMs: 10
+    });
+
+    try {
+      let detail = await getImportDetail(db, { owner, importJobId: created.importJobId });
+      for (
+        let attempt = 0;
+        attempt < 50 && (detail?.queueJob?.status !== "retryable" || detail.importJob.status !== "failed");
+        attempt += 1
+      ) {
+        await delay(20);
+        detail = await getImportDetail(db, { owner, importJobId: created.importJobId });
+      }
+
+      expect(detail?.queueJob?.status).toBe("retryable");
+      expect(detail?.importJob.status).toBe("failed");
+      expect(detail?.importJob.errorCode).toBe("worker_error");
+      expect(detail?.sourceDocument.status).toBe("failed");
+      expect(detail?.history.at(-1)?.reason).toBe("worker_error");
+
+      const [failedEvent] = await db
+        .select()
+        .from(outboxEvents)
+        .where(and(eq(outboxEvents.aggregateId, created.importJobId), eq(outboxEvents.eventType, "import.failed")))
+        .limit(1);
+      expect(failedEvent?.eventType).toBe("import.failed");
+    } finally {
+      controller.abort();
+      await workerPromise;
+      if (previousRoot === undefined) {
+        delete process.env.OPENVITALS_OBJECT_STORAGE_ROOT;
+      } else {
+        process.env.OPENVITALS_OBJECT_STORAGE_ROOT = previousRoot;
+      }
+    }
   });
 
   it("rejects multipart uploads larger than the configured byte cap", async () => {

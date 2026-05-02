@@ -17,10 +17,45 @@ export type SharedObservationRow = {
   trustLevel: string;
 };
 
-export type ListSharedObservationsInput = {
+type RecipientShareIdentity =
+  | {
+      recipientUserId: string;
+      recipientEmail?: never;
+      accessTokenHash?: never;
+      privilegedAccess?: never;
+    }
+  | {
+      recipientUserId?: never;
+      recipientEmail: string;
+      accessTokenHash?: never;
+      privilegedAccess?: never;
+    }
+  | {
+      recipientUserId?: never;
+      recipientEmail?: never;
+      accessTokenHash: string;
+      privilegedAccess?: never;
+    };
+
+type PrivilegedShareIdentity = {
+  recipientUserId?: never;
+  recipientEmail?: never;
+  accessTokenHash?: never;
+  privilegedAccess: {
+    reason: "owner" | "admin" | "system";
+    ownerUserId?: string | undefined;
+  };
+};
+
+type ShareIdentityFields = {
+  recipientUserId?: string | undefined;
+  recipientEmail?: string | undefined;
+  accessTokenHash?: string | undefined;
+  privilegedAccess?: PrivilegedShareIdentity["privilegedAccess"] | undefined;
+};
+
+export type ListSharedObservationsInput = (RecipientShareIdentity | PrivilegedShareIdentity) & {
   policyId: string;
-  recipientUserId?: string;
-  recipientEmail?: string;
   actor: Extract<Actor, { type: "recipient" | "user" | "admin" | "system" }>;
   metadata?: Record<string, unknown>;
   now?: Date;
@@ -67,10 +102,37 @@ async function findSharePolicyOwner(
   return row ?? null;
 }
 
+function shareIdentityPredicates(input: ShareIdentityFields): SQL[] | null {
+  if ("recipientUserId" in input && input.recipientUserId) {
+    return [eq(sharePolicies.recipientUserId, input.recipientUserId)];
+  }
+
+  if ("recipientEmail" in input && input.recipientEmail) {
+    return [eq(sharePolicies.recipientEmail, input.recipientEmail)];
+  }
+
+  if ("accessTokenHash" in input && input.accessTokenHash) {
+    return [eq(sharePolicies.accessTokenHash, input.accessTokenHash)];
+  }
+
+  if ("privilegedAccess" in input && input.privilegedAccess) {
+    return input.privilegedAccess.ownerUserId
+      ? [eq(sharePolicies.ownerUserId, input.privilegedAccess.ownerUserId)]
+      : [];
+  }
+
+  return null;
+}
+
 async function findAccessibleSharePolicy(
   db: OpenVitalsDbExecutor,
   input: ListSharedObservationsInput
 ): Promise<{ ownerUserId: string } | null> {
+  const identityPredicates = shareIdentityPredicates(input);
+  if (identityPredicates === null) {
+    return null;
+  }
+
   const now = input.now ?? new Date();
   const conditions: SQL[] = [
     eq(sharePolicies.id, input.policyId),
@@ -78,14 +140,7 @@ async function findAccessibleSharePolicy(
     lte(sharePolicies.startsAt, now),
     or(isNull(sharePolicies.expiresAt), gt(sharePolicies.expiresAt, now))!
   ];
-
-  if (input.recipientUserId) {
-    conditions.push(eq(sharePolicies.recipientUserId, input.recipientUserId));
-  }
-
-  if (input.recipientEmail) {
-    conditions.push(eq(sharePolicies.recipientEmail, input.recipientEmail));
-  }
+  conditions.push(...identityPredicates);
 
   const [policy] = await db
     .select({ ownerUserId: sharePolicies.ownerUserId })
@@ -100,6 +155,11 @@ async function listSharedObservationsUnchecked(
   db: OpenVitalsDbExecutor,
   input: Omit<ListSharedObservationsInput, "actor" | "metadata">
 ): Promise<SharedObservationRow[]> {
+  const identityPredicates = shareIdentityPredicates(input);
+  if (identityPredicates === null) {
+    return [];
+  }
+
   const now = input.now ?? new Date();
   const conditions: SQL[] = [
     eq(sharePolicies.id, input.policyId),
@@ -110,14 +170,7 @@ async function listSharedObservationsUnchecked(
     eq(sharePolicyScopes.policyId, sharePolicies.id),
     eq(sharePolicyScopes.category, observations.category)
   ];
-
-  if (input.recipientUserId) {
-    conditions.push(eq(sharePolicies.recipientUserId, input.recipientUserId));
-  }
-
-  if (input.recipientEmail) {
-    conditions.push(eq(sharePolicies.recipientEmail, input.recipientEmail));
-  }
+  conditions.push(...identityPredicates);
 
   conditions.push(
     or(isNull(sharePolicies.fromObservedAt), and(gte(observations.observedAt, sharePolicies.fromObservedAt)))!

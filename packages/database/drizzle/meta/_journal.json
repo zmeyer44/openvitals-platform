@@ -50,6 +50,13 @@
       "when": 1777672083775,
       "tag": "0006_chunky_gorilla_man",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1777700520848,
+      "tag": "0007_rapid_morlocks",
+      "breakpoints": true
     }
   ]
 }

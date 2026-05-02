@@ -2,6 +2,7 @@ import { sql } from "drizzle-orm";
 import {
   boolean,
   check,
+  foreignKey,
   index,
   integer,
   jsonb,
@@ -285,6 +286,7 @@ export const blobObjects = pgTable(
   },
   (table) => [
     uniqueIndex("blob_objects_object_key_unique").on(table.objectKey),
+    uniqueIndex("blob_objects_owner_id_unique").on(table.ownerUserId, table.id),
     index("blob_objects_owner_idx").on(table.ownerUserId),
     index("blob_objects_sha256_idx").on(table.sha256)
   ]
@@ -314,6 +316,12 @@ export const sourceDocuments = pgTable(
     ...timestamps
   },
   (table) => [
+    uniqueIndex("source_documents_owner_id_unique").on(table.ownerUserId, table.id),
+    foreignKey({
+      name: "source_documents_owner_blob_fk",
+      columns: [table.ownerUserId, table.blobObjectId],
+      foreignColumns: [blobObjects.ownerUserId, blobObjects.id]
+    }).onDelete("no action"),
     index("source_documents_owner_status_idx").on(table.ownerUserId, table.status),
     index("source_documents_blob_idx").on(table.blobObjectId),
     uniqueIndex("source_documents_manual_intake_file_unique")
@@ -346,6 +354,12 @@ export const importJobs = pgTable(
   },
   (table) => [
     uniqueIndex("import_jobs_idempotency_key_unique").on(table.idempotencyKey),
+    uniqueIndex("import_jobs_owner_id_unique").on(table.ownerUserId, table.id),
+    foreignKey({
+      name: "import_jobs_owner_source_document_fk",
+      columns: [table.ownerUserId, table.sourceDocumentId],
+      foreignColumns: [sourceDocuments.ownerUserId, sourceDocuments.id]
+    }).onDelete("cascade"),
     index("import_jobs_owner_status_idx").on(table.ownerUserId, table.status),
     index("import_jobs_source_document_idx").on(table.sourceDocumentId)
   ]
@@ -377,6 +391,16 @@ export const fileClassifications = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull()
   },
   (table) => [
+    foreignKey({
+      name: "file_classifications_owner_source_document_fk",
+      columns: [table.ownerUserId, table.sourceDocumentId],
+      foreignColumns: [sourceDocuments.ownerUserId, sourceDocuments.id]
+    }).onDelete("cascade"),
+    foreignKey({
+      name: "file_classifications_owner_import_job_fk",
+      columns: [table.ownerUserId, table.importJobId],
+      foreignColumns: [importJobs.ownerUserId, importJobs.id]
+    }).onDelete("cascade"),
     index("file_classifications_import_job_idx").on(table.importJobId),
     index("file_classifications_document_idx").on(table.sourceDocumentId),
     index("file_classifications_owner_decision_idx").on(table.ownerUserId, table.decision)
@@ -406,6 +430,16 @@ export const importStatusHistory = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull()
   },
   (table) => [
+    foreignKey({
+      name: "import_status_history_owner_import_job_fk",
+      columns: [table.ownerUserId, table.importJobId],
+      foreignColumns: [importJobs.ownerUserId, importJobs.id]
+    }).onDelete("cascade"),
+    foreignKey({
+      name: "import_status_history_owner_source_document_fk",
+      columns: [table.ownerUserId, table.sourceDocumentId],
+      foreignColumns: [sourceDocuments.ownerUserId, sourceDocuments.id]
+    }).onDelete("cascade"),
     index("import_status_history_import_job_idx").on(table.importJobId, table.createdAt),
     index("import_status_history_document_idx").on(table.sourceDocumentId, table.createdAt),
     index("import_status_history_owner_idx").on(table.ownerUserId, table.createdAt)
@@ -438,6 +472,17 @@ export const sourceRecords = pgTable(
     ...timestamps
   },
   (table) => [
+    uniqueIndex("source_records_owner_id_unique").on(table.ownerUserId, table.id),
+    foreignKey({
+      name: "source_records_owner_source_document_fk",
+      columns: [table.ownerUserId, table.sourceDocumentId],
+      foreignColumns: [sourceDocuments.ownerUserId, sourceDocuments.id]
+    }).onDelete("cascade"),
+    foreignKey({
+      name: "source_records_owner_import_job_fk",
+      columns: [table.ownerUserId, table.importJobId],
+      foreignColumns: [importJobs.ownerUserId, importJobs.id]
+    }).onDelete("no action"),
     index("source_records_document_idx").on(table.sourceDocumentId),
     index("source_records_import_job_idx").on(table.importJobId),
     index("source_records_owner_type_idx").on(table.ownerUserId, table.recordType)
@@ -475,6 +520,12 @@ export const observations = pgTable(
     ...timestamps
   },
   (table) => [
+    uniqueIndex("observations_owner_id_unique").on(table.ownerUserId, table.id),
+    foreignKey({
+      name: "observations_owner_source_record_fk",
+      columns: [table.ownerUserId, table.sourceRecordId],
+      foreignColumns: [sourceRecords.ownerUserId, sourceRecords.id]
+    }).onDelete("no action"),
     index("observations_owner_category_date_idx").on(table.ownerUserId, table.category, table.observedAt),
     index("observations_source_record_idx").on(table.sourceRecordId),
     index("observations_review_state_idx").on(table.ownerUserId, table.reviewState)
@@ -506,6 +557,12 @@ export const conditions = pgTable(
     ...timestamps
   },
   (table) => [
+    uniqueIndex("conditions_owner_id_unique").on(table.ownerUserId, table.id),
+    foreignKey({
+      name: "conditions_owner_source_record_fk",
+      columns: [table.ownerUserId, table.sourceRecordId],
+      foreignColumns: [sourceRecords.ownerUserId, sourceRecords.id]
+    }).onDelete("no action"),
     index("conditions_owner_status_idx").on(table.ownerUserId, table.clinicalStatus),
     index("conditions_source_record_idx").on(table.sourceRecordId),
     index("conditions_review_state_idx").on(table.ownerUserId, table.reviewState)
@@ -537,6 +594,12 @@ export const medications = pgTable(
     ...timestamps
   },
   (table) => [
+    uniqueIndex("medications_owner_id_unique").on(table.ownerUserId, table.id),
+    foreignKey({
+      name: "medications_owner_source_record_fk",
+      columns: [table.ownerUserId, table.sourceRecordId],
+      foreignColumns: [sourceRecords.ownerUserId, sourceRecords.id]
+    }).onDelete("no action"),
     index("medications_owner_active_idx").on(table.ownerUserId, table.active),
     index("medications_source_record_idx").on(table.sourceRecordId),
     index("medications_review_state_idx").on(table.ownerUserId, table.reviewState)
@@ -566,6 +629,12 @@ export const encounters = pgTable(
     ...timestamps
   },
   (table) => [
+    uniqueIndex("encounters_owner_id_unique").on(table.ownerUserId, table.id),
+    foreignKey({
+      name: "encounters_owner_source_record_fk",
+      columns: [table.ownerUserId, table.sourceRecordId],
+      foreignColumns: [sourceRecords.ownerUserId, sourceRecords.id]
+    }).onDelete("no action"),
     index("encounters_owner_date_idx").on(table.ownerUserId, table.startedAt),
     index("encounters_source_record_idx").on(table.sourceRecordId)
   ]
@@ -603,6 +672,21 @@ export const provenance = pgTable(
         or (${table.actorType} = 'integration' and ${table.actorId} is not null)
       `
     ),
+    foreignKey({
+      name: "provenance_owner_source_document_fk",
+      columns: [table.ownerUserId, table.sourceDocumentId],
+      foreignColumns: [sourceDocuments.ownerUserId, sourceDocuments.id]
+    }).onDelete("no action"),
+    foreignKey({
+      name: "provenance_owner_source_record_fk",
+      columns: [table.ownerUserId, table.sourceRecordId],
+      foreignColumns: [sourceRecords.ownerUserId, sourceRecords.id]
+    }).onDelete("no action"),
+    foreignKey({
+      name: "provenance_owner_import_job_fk",
+      columns: [table.ownerUserId, table.importJobId],
+      foreignColumns: [importJobs.ownerUserId, importJobs.id]
+    }).onDelete("no action"),
     index("provenance_resource_idx").on(table.resourceType, table.resourceId),
     index("provenance_source_record_idx").on(table.sourceRecordId),
     index("provenance_owner_idx").on(table.ownerUserId)
@@ -631,6 +715,12 @@ export const reviewTasks = pgTable(
     ...timestamps
   },
   (table) => [
+    uniqueIndex("review_tasks_owner_id_unique").on(table.ownerUserId, table.id),
+    foreignKey({
+      name: "review_tasks_owner_source_record_fk",
+      columns: [table.ownerUserId, table.sourceRecordId],
+      foreignColumns: [sourceRecords.ownerUserId, sourceRecords.id]
+    }).onDelete("no action"),
     index("review_tasks_owner_status_idx").on(table.ownerUserId, table.status),
     index("review_tasks_resource_idx").on(table.resourceType, table.resourceId),
     index("review_tasks_source_record_idx").on(table.sourceRecordId)
