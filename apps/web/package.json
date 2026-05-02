@@ -5,7 +5,8 @@
   "scripts": {
     "dev": "vite dev",
     "build": "vite build",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "postinstall": "cp node_modules/pdfjs-dist/build/pdf.worker.min.mjs public/pdf.worker.min.mjs"
   },
   "dependencies": {
     "@better-auth/drizzle-adapter": "^1.6.9",
@@ -42,6 +43,7 @@
     "date-fns": "^4.1.0",
     "drizzle-orm": "^0.45.1",
     "lucide-react": "^0.456.0",
+    "pdfjs-dist": "^5.4.449",
     "react": "^19.2.3",
     "react-day-picker": "^9.4.0",
     "react-dom": "^19.2.3",

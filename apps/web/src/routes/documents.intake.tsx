@@ -15,6 +15,7 @@ import {
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
+import { PDFViewer } from "../components/pdf-viewer";
 import { BrandLockup } from "../components/showcase/brand";
 import { cn } from "../lib/cn";
 
@@ -615,10 +616,9 @@ function SourcePreview({
         )}
 
         {detail && mimeType === "application/pdf" && (
-          <iframe
-            title={detail.sourceDocument.fileName ?? "Uploaded source document"}
-            src={documentUrl}
-            className="h-[720px] w-full rounded-[7px] border border-line bg-white shadow-sm"
+          <PDFViewer
+            url={documentUrl}
+            className="h-[720px] w-full shadow-sm"
           />
         )}
 
