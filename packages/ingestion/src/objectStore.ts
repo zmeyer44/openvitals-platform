@@ -11,6 +11,8 @@ export type ObjectStore = {
   delete(objectKey: string): Promise<void>;
 };
 
+export type ObjectStoreResolver = (input: { storageProvider: string }) => ObjectStore;
+
 function resolveObjectPath(root: string, objectKey: string): string {
   const rootPath = path.isAbsolute(root) ? root : path.resolve(process.env.INIT_CWD ?? process.cwd(), root);
   const fullPath = path.resolve(rootPath, objectKey);
@@ -40,18 +42,28 @@ export function createLocalObjectStore(root: string): ObjectStore {
 }
 
 export type VercelBlobObjectStoreOptions = {
-  token?: string | undefined;
+  token: string;
   access?: "public" | "private" | undefined;
 };
 
-export function createVercelBlobObjectStore(options: VercelBlobObjectStoreOptions = {}): ObjectStore {
-  const access = options.access ?? "public";
-  const tokenOption = options.token === undefined ? {} : { token: options.token };
+function vercelBlobUrlFromToken(token: string, pathname: string, access: "public" | "private"): string {
+  // Token format: vercel_blob_rw_<storeId>_<random>
+  const storeId = token.split("_")[3];
+  if (!storeId) {
+    throw new Error("Invalid BLOB_READ_WRITE_TOKEN: cannot extract store ID");
+  }
+  return `https://${storeId}.${access}.blob.vercel-storage.com/${pathname}`;
+}
+
+export function createVercelBlobObjectStore(options: VercelBlobObjectStoreOptions): ObjectStore {
+  const access: "public" | "private" = options.access ?? "public";
+  const token = options.token;
 
   return {
     provider: "vercel",
     async read(objectKey) {
-      const result = await blobGet(objectKey, { access, ...tokenOption });
+      const url = vercelBlobUrlFromToken(token, objectKey, access);
+      const result = await blobGet(url, { access, token });
       if (!result) {
         throw new Error(`Blob not found: ${objectKey}`);
       }
@@ -62,12 +74,13 @@ export function createVercelBlobObjectStore(options: VercelBlobObjectStoreOption
         access,
         addRandomSuffix: false,
         allowOverwrite: true,
-        ...tokenOption
+        token
       });
     },
     async delete(objectKey) {
+      const url = vercelBlobUrlFromToken(token, objectKey, access);
       try {
-        await blobDel(objectKey, { ...tokenOption });
+        await blobDel(url, { token });
       } catch (error) {
         if (error instanceof BlobNotFoundError) {
           return;
@@ -95,17 +108,47 @@ export function createObjectStoreFromEnv(options: CreateObjectStoreFromEnvOption
   const provider = (env.BLOB_STORAGE_PROVIDER ?? "local").toLowerCase();
 
   if (provider === "vercel") {
-    const token = env.BLOB_READ_WRITE_TOKEN;
-    if (!token) {
-      throw new Error("BLOB_READ_WRITE_TOKEN must be set when BLOB_STORAGE_PROVIDER=vercel");
-    }
-    const access = env.BLOB_ACCESS === "private" ? "private" : "public";
-    return createVercelBlobObjectStore({ token, access });
+    return buildVercelStoreFromEnv(env);
   }
 
   if (provider !== "local") {
     throw new Error(`Unknown BLOB_STORAGE_PROVIDER: ${provider}`);
   }
 
-  return createLocalObjectStore(env.OPENVITALS_OBJECT_STORAGE_ROOT ?? options.fallbackLocalRoot ?? ".data/blobs");
+  return buildLocalStoreFromEnv(env, options.fallbackLocalRoot);
+}
+
+export function createObjectStoreResolverFromEnv(
+  options: CreateObjectStoreFromEnvOptions = {}
+): ObjectStoreResolver {
+  const env = options.env ?? (process.env as ObjectStoreEnv);
+
+  let localStore: ObjectStore | undefined;
+  let vercelStore: ObjectStore | undefined;
+
+  return ({ storageProvider }) => {
+    const provider = storageProvider.toLowerCase();
+    if (provider === "local") {
+      localStore ??= buildLocalStoreFromEnv(env, options.fallbackLocalRoot);
+      return localStore;
+    }
+    if (provider === "vercel") {
+      vercelStore ??= buildVercelStoreFromEnv(env);
+      return vercelStore;
+    }
+    throw new Error(`Unknown storage provider on blob record: ${storageProvider}`);
+  };
+}
+
+function buildLocalStoreFromEnv(env: ObjectStoreEnv, fallbackRoot: string | undefined): ObjectStore {
+  return createLocalObjectStore(env.OPENVITALS_OBJECT_STORAGE_ROOT ?? fallbackRoot ?? ".data/blobs");
+}
+
+function buildVercelStoreFromEnv(env: ObjectStoreEnv): ObjectStore {
+  const token = env.BLOB_READ_WRITE_TOKEN;
+  if (!token) {
+    throw new Error("BLOB_READ_WRITE_TOKEN must be set to access vercel-stored blobs");
+  }
+  const access = env.BLOB_ACCESS === "private" ? "private" : "public";
+  return createVercelBlobObjectStore({ token, access });
 }

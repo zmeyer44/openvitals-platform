@@ -23,14 +23,28 @@ import {
   type OpenVitalsDatabase
 } from "@openvitals/database";
 import { buildSourceDocumentObjectKey, sha256Hex } from "@openvitals/domain";
-import { createLocalObjectStore, createObjectStoreFromEnv, type ObjectStore } from "@openvitals/ingestion";
+import {
+  createLocalObjectStore,
+  createObjectStoreFromEnv,
+  createObjectStoreResolverFromEnv,
+  type ObjectStore,
+  type ObjectStoreResolver
+} from "@openvitals/ingestion";
 import type { AuthenticatedOwnerContext } from "./ownership";
 
-function resolveObjectStore(objectStorageRoot: string | undefined): ObjectStore {
+function resolveWriteObjectStore(objectStorageRoot: string | undefined): ObjectStore {
   if (objectStorageRoot) {
     return createLocalObjectStore(objectStorageRoot);
   }
   return createObjectStoreFromEnv();
+}
+
+function resolveReadObjectStoreResolver(objectStorageRoot: string | undefined): ObjectStoreResolver {
+  if (objectStorageRoot) {
+    const localStore = createLocalObjectStore(objectStorageRoot);
+    return () => localStore;
+  }
+  return createObjectStoreResolverFromEnv();
 }
 
 export type CreateImportInput = {
@@ -192,7 +206,7 @@ export async function createImport(
     sha256,
     fileName: input.fileName
   });
-  const objectStore = resolveObjectStore(input.objectStorageRoot);
+  const objectStore = resolveWriteObjectStore(input.objectStorageRoot);
 
   await objectStore.write(objectKey, bytes);
 
@@ -519,7 +533,9 @@ export async function getImportDocumentBlob(
     return null;
   }
 
-  const objectStore = resolveObjectStore(input.objectStorageRoot);
+  const objectStore = resolveReadObjectStoreResolver(input.objectStorageRoot)({
+    storageProvider: row.blob.storageProvider
+  });
 
   return {
     bytes: await objectStore.read(row.blob.objectKey),
