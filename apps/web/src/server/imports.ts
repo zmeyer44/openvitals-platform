@@ -23,8 +23,15 @@ import {
   type OpenVitalsDatabase
 } from "@openvitals/database";
 import { buildSourceDocumentObjectKey, sha256Hex } from "@openvitals/domain";
-import { createLocalObjectStore } from "@openvitals/ingestion";
+import { createLocalObjectStore, createObjectStoreFromEnv, type ObjectStore } from "@openvitals/ingestion";
 import type { AuthenticatedOwnerContext } from "./ownership";
+
+function resolveObjectStore(objectStorageRoot: string | undefined): ObjectStore {
+  if (objectStorageRoot) {
+    return createLocalObjectStore(objectStorageRoot);
+  }
+  return createObjectStoreFromEnv();
+}
 
 export type CreateImportInput = {
   owner: Pick<AuthenticatedOwnerContext, "ownerUserId" | "actor">;
@@ -185,9 +192,7 @@ export async function createImport(
     sha256,
     fileName: input.fileName
   });
-  const objectStore = createLocalObjectStore(
-    input.objectStorageRoot ?? process.env.OPENVITALS_OBJECT_STORAGE_ROOT ?? ".data/blobs"
-  );
+  const objectStore = resolveObjectStore(input.objectStorageRoot);
 
   await objectStore.write(objectKey, bytes);
 
@@ -215,6 +220,7 @@ export async function createImport(
         .values({
           ownerUserId,
           objectKey,
+          storageProvider: objectStore.provider,
           sha256,
           mimeType: input.mimeType,
           byteSize: bytes.length
@@ -222,6 +228,7 @@ export async function createImport(
         .onConflictDoUpdate({
           target: blobObjects.objectKey,
           set: {
+            storageProvider: objectStore.provider,
             mimeType: input.mimeType,
             byteSize: bytes.length,
             updatedAt: new Date()
@@ -512,9 +519,7 @@ export async function getImportDocumentBlob(
     return null;
   }
 
-  const objectStore = createLocalObjectStore(
-    input.objectStorageRoot ?? process.env.OPENVITALS_OBJECT_STORAGE_ROOT ?? ".data/blobs"
-  );
+  const objectStore = resolveObjectStore(input.objectStorageRoot);
 
   return {
     bytes: await objectStore.read(row.blob.objectKey),

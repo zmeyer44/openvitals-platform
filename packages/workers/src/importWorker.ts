@@ -11,7 +11,7 @@ import {
   sourceDocuments,
   type OpenVitalsDatabase
 } from "@openvitals/database";
-import { createLocalObjectStore, processImportJob } from "@openvitals/ingestion";
+import { createObjectStoreFromEnv, processImportJob } from "@openvitals/ingestion";
 import { logger } from "./logger";
 
 export type WorkerLoopOptions = {
@@ -22,7 +22,7 @@ export type WorkerLoopOptions = {
 };
 
 export async function runImportWorkerLoop(options: WorkerLoopOptions): Promise<void> {
-  const objectStore = createLocalObjectStore(process.env.OPENVITALS_OBJECT_STORAGE_ROOT ?? ".data/blobs");
+  const objectStore = createObjectStoreFromEnv();
   const pollIntervalMs = options.pollIntervalMs ?? 1000;
 
   logger.info({ workerId: options.workerId }, "import worker started");
