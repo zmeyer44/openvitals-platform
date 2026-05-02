@@ -160,6 +160,7 @@ async function ensureIntakeSourceDocument(
   ownerUserId: string,
   workflowId: string
 ): Promise<typeof sourceDocuments.$inferSelect> {
+  const fileName = intakeDocumentName(workflowId);
   const [existing] = await db
     .select()
     .from(sourceDocuments)
@@ -167,7 +168,7 @@ async function ensureIntakeSourceDocument(
       and(
         eq(sourceDocuments.ownerUserId, ownerUserId),
         eq(sourceDocuments.sourceKind, "manual_intake"),
-        eq(sourceDocuments.fileName, intakeDocumentName(workflowId))
+        eq(sourceDocuments.fileName, fileName)
       )
     )
     .limit(1);
@@ -181,7 +182,7 @@ async function ensureIntakeSourceDocument(
     .values({
       ownerUserId,
       sourceKind: "manual_intake",
-      fileName: intakeDocumentName(workflowId),
+      fileName,
       mimeType: "application/vnd.openvitals.intake+json",
       status: "normalized",
       classification: "manual_intake",
@@ -211,7 +212,16 @@ async function requireOpenWorkflow(
   ownerUserId: string,
   workflowId: string
 ): Promise<RequiredWorkflowResult> {
-  const workflow = await getIntakeWorkflowById(db, { ownerUserId, workflowId });
+  // Lock the workflow row so concurrent step saves serialize on this owner's
+  // active intake. Without this, ensureIntakeSourceDocument's SELECT-then-INSERT
+  // races and can hit the partial unique index on source_documents.
+  const [workflow] = await db
+    .select()
+    .from(intakeWorkflows)
+    .where(and(eq(intakeWorkflows.ownerUserId, ownerUserId), eq(intakeWorkflows.id, workflowId)))
+    .for("update")
+    .limit(1);
+
   if (!workflow) {
     throw new IntakeApiError(404, "intake_not_found", "Intake workflow not found.");
   }

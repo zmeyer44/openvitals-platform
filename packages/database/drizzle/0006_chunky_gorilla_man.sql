@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX "source_documents_manual_intake_file_unique" ON "source_documents" USING btree ("owner_user_id","file_name") WHERE "source_documents"."source_kind" = 'manual_intake';

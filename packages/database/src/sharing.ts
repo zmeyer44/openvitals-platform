@@ -33,6 +33,13 @@ export async function listSharedObservations(
   return db.transaction(async (tx) => {
     const policy = await findAccessibleSharePolicy(tx, input);
     if (!policy) {
+      const owner = await findSharePolicyOwner(tx, input.policyId);
+      await recordShareAccessDenied(tx, {
+        ownerUserId: owner?.ownerUserId ?? null,
+        policyId: input.policyId,
+        actor: input.actor,
+        ...(input.metadata ? { metadata: input.metadata } : {})
+      });
       return [];
     }
 
@@ -46,6 +53,18 @@ export async function listSharedObservations(
     });
     return rows;
   });
+}
+
+async function findSharePolicyOwner(
+  db: OpenVitalsDbExecutor,
+  policyId: string
+): Promise<{ ownerUserId: string } | null> {
+  const [row] = await db
+    .select({ ownerUserId: sharePolicies.ownerUserId })
+    .from(sharePolicies)
+    .where(eq(sharePolicies.id, policyId))
+    .limit(1);
+  return row ?? null;
 }
 
 async function findAccessibleSharePolicy(
@@ -154,6 +173,41 @@ export async function recordShareAccess(
 
   await db.insert(outboxEvents).values({
     eventType: "share.accessed",
+    aggregateType: "share_policy",
+    aggregateId: input.policyId,
+    ownerUserId: input.ownerUserId,
+    actorType: input.actor.type,
+    actorId: input.actor.id ?? null,
+    payload: metadata
+  });
+}
+
+export async function recordShareAccessDenied(
+  db: OpenVitalsDbExecutor,
+  input: {
+    ownerUserId: string | null;
+    policyId: string;
+    actor: Extract<Actor, { type: "recipient" | "user" | "admin" | "system" }>;
+    metadata?: Record<string, unknown>;
+  }
+): Promise<void> {
+  const metadata = {
+    outcome: "denied",
+    ...(input.metadata ?? {})
+  };
+
+  await db.insert(auditEvents).values({
+    ownerUserId: input.ownerUserId,
+    actorType: input.actor.type,
+    actorId: input.actor.id ?? null,
+    action: "share.access_denied",
+    resourceType: "share_policy",
+    resourceId: input.policyId,
+    metadata
+  });
+
+  await db.insert(outboxEvents).values({
+    eventType: "share.access_denied",
     aggregateType: "share_policy",
     aggregateId: input.policyId,
     ownerUserId: input.ownerUserId,
