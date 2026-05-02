@@ -1,7 +1,7 @@
 import { and, eq, gt, gte, isNull, lte, or, type SQL } from "drizzle-orm";
 import type { Actor } from "@openvitals/domain";
 import type { OpenVitalsDbExecutor } from "./client";
-import { auditEvents, observations, sharePolicies, sharePolicyScopes } from "./schema";
+import { auditEvents, observations, outboxEvents, sharePolicies, sharePolicyScopes } from "./schema";
 
 export type SharedObservationRow = {
   id: string;
@@ -21,12 +21,65 @@ export type ListSharedObservationsInput = {
   policyId: string;
   recipientUserId?: string;
   recipientEmail?: string;
+  actor: Extract<Actor, { type: "recipient" | "user" | "admin" | "system" }>;
+  metadata?: Record<string, unknown>;
   now?: Date;
 };
 
 export async function listSharedObservations(
   db: OpenVitalsDbExecutor,
   input: ListSharedObservationsInput
+): Promise<SharedObservationRow[]> {
+  return db.transaction(async (tx) => {
+    const policy = await findAccessibleSharePolicy(tx, input);
+    if (!policy) {
+      return [];
+    }
+
+    const rows = await listSharedObservationsUnchecked(tx, input);
+    await recordShareAccess(tx, {
+      ownerUserId: policy.ownerUserId,
+      policyId: input.policyId,
+      actor: input.actor,
+      resultCount: rows.length,
+      ...(input.metadata ? { metadata: input.metadata } : {})
+    });
+    return rows;
+  });
+}
+
+async function findAccessibleSharePolicy(
+  db: OpenVitalsDbExecutor,
+  input: ListSharedObservationsInput
+): Promise<{ ownerUserId: string } | null> {
+  const now = input.now ?? new Date();
+  const conditions: SQL[] = [
+    eq(sharePolicies.id, input.policyId),
+    eq(sharePolicies.status, "active"),
+    lte(sharePolicies.startsAt, now),
+    or(isNull(sharePolicies.expiresAt), gt(sharePolicies.expiresAt, now))!
+  ];
+
+  if (input.recipientUserId) {
+    conditions.push(eq(sharePolicies.recipientUserId, input.recipientUserId));
+  }
+
+  if (input.recipientEmail) {
+    conditions.push(eq(sharePolicies.recipientEmail, input.recipientEmail));
+  }
+
+  const [policy] = await db
+    .select({ ownerUserId: sharePolicies.ownerUserId })
+    .from(sharePolicies)
+    .where(and(...conditions))
+    .limit(1);
+
+  return policy ?? null;
+}
+
+async function listSharedObservationsUnchecked(
+  db: OpenVitalsDbExecutor,
+  input: Omit<ListSharedObservationsInput, "actor" | "metadata">
 ): Promise<SharedObservationRow[]> {
   const now = input.now ?? new Date();
   const conditions: SQL[] = [
@@ -84,6 +137,11 @@ export async function recordShareAccess(
     metadata?: Record<string, unknown>;
   }
 ): Promise<void> {
+  const metadata = {
+    resultCount: input.resultCount,
+    ...(input.metadata ?? {})
+  };
+
   await db.insert(auditEvents).values({
     ownerUserId: input.ownerUserId,
     actorType: input.actor.type,
@@ -91,9 +149,16 @@ export async function recordShareAccess(
     action: "share.accessed",
     resourceType: "share_policy",
     resourceId: input.policyId,
-    metadata: {
-      resultCount: input.resultCount,
-      ...(input.metadata ?? {})
-    }
+    metadata
+  });
+
+  await db.insert(outboxEvents).values({
+    eventType: "share.accessed",
+    aggregateType: "share_policy",
+    aggregateId: input.policyId,
+    ownerUserId: input.ownerUserId,
+    actorType: input.actor.type,
+    actorId: input.actor.id ?? null,
+    payload: metadata
   });
 }

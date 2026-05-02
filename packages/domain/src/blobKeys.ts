@@ -16,5 +16,5 @@ export function buildSourceDocumentObjectKey(input: {
     .replace(/^-+|-+$/g, "")
     .slice(0, 120);
 
-  return `users/${input.ownerUserId}/source-documents/${input.sourceDocumentId}/${input.sha256}-${safeName || "document"}`;
+  return `users/${input.ownerUserId}/source-documents/by-sha256/${input.sha256}/${safeName || "document"}`;
 }

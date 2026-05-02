@@ -1,6 +1,6 @@
 import { Buffer } from "node:buffer";
 import { randomUUID } from "node:crypto";
-import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull } from "drizzle-orm";
 import {
   appendImportStatusHistory,
   blobObjects,
@@ -205,6 +205,14 @@ export async function createImport(
           mimeType: input.mimeType,
           byteSize: bytes.length
         })
+        .onConflictDoUpdate({
+          target: blobObjects.objectKey,
+          set: {
+            mimeType: input.mimeType,
+            byteSize: bytes.length,
+            updatedAt: new Date()
+          }
+        })
         .returning();
 
       if (!blob) {
@@ -264,11 +272,11 @@ export async function createImport(
     if (isUniqueViolation(error, "import_jobs_idempotency_key_unique")) {
       const raced = await findExistingImportByKey(db, ownerUserId, idempotencyKey);
       if (raced) {
-        await safeDeleteObject(objectStore, objectKey);
+        await safeDeleteUnreferencedObject(db, objectStore, objectKey);
         return { status: "deduplicated", ...raced };
       }
     }
-    await safeDeleteObject(objectStore, objectKey);
+    await safeDeleteUnreferencedObject(db, objectStore, objectKey);
     throw error;
   }
 }
@@ -278,6 +286,22 @@ async function safeDeleteObject(objectStore: { delete(objectKey: string): Promis
     await objectStore.delete(objectKey);
   } catch {
     // Best-effort: leave a reaper to mop up if delete fails (e.g. file already missing or transient I/O).
+  }
+}
+
+async function safeDeleteUnreferencedObject(
+  db: OpenVitalsDatabase,
+  objectStore: { delete(objectKey: string): Promise<void> },
+  objectKey: string
+): Promise<void> {
+  const [referenced] = await db
+    .select({ id: blobObjects.id })
+    .from(blobObjects)
+    .where(eq(blobObjects.objectKey, objectKey))
+    .limit(1);
+
+  if (!referenced) {
+    await safeDeleteObject(objectStore, objectKey);
   }
 }
 
@@ -424,25 +448,17 @@ export async function retryImport(
     throw new ImportApiError(409, "import_in_flight", "Import is currently being processed and cannot be retried.");
   }
 
+  await assertImportHasNoCanonicalRecords(db, {
+    ownerUserId: input.owner.ownerUserId,
+    sourceRecordIds: detail.sourceRecords.map((record) => record.id)
+  });
+
   try {
     await db.transaction(async (tx) => {
       const now = new Date();
       const importJobId = detail.importJob.id;
       const sourceDocumentId = detail.sourceDocument.id;
       const ownerUserId = input.owner.ownerUserId;
-
-      const sourceRecordIdsForJob = sql`(select id from ${sourceRecords} where ${sourceRecords.importJobId} = ${importJobId} and ${sourceRecords.ownerUserId} = ${ownerUserId})`;
-
-      for (const table of [observations, conditions, medications, encounters] as const) {
-        await tx
-          .delete(table)
-          .where(
-            and(
-              eq(table.ownerUserId, ownerUserId),
-              sql`${table.sourceRecordId} in ${sourceRecordIdsForJob}`
-            )
-          );
-      }
 
       await tx
         .delete(reviewTasks)
@@ -522,4 +538,29 @@ export async function retryImport(
   }
 
   return getImportDetail(db, input);
+}
+
+async function assertImportHasNoCanonicalRecords(
+  db: OpenVitalsDatabase,
+  input: { ownerUserId: string; sourceRecordIds: string[] }
+): Promise<void> {
+  if (input.sourceRecordIds.length === 0) {
+    return;
+  }
+
+  for (const table of [observations, conditions, medications, encounters] as const) {
+    const [existing] = await db
+      .select({ id: table.id })
+      .from(table)
+      .where(and(eq(table.ownerUserId, input.ownerUserId), inArray(table.sourceRecordId, input.sourceRecordIds)))
+      .limit(1);
+
+    if (existing) {
+      throw new ImportApiError(
+        409,
+        "import_retry_has_canonical_records",
+        "Imports that have already materialized canonical records cannot be reset for retry."
+      );
+    }
+  }
 }

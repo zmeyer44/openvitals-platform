@@ -669,7 +669,12 @@ export const intakeWorkflows = pgTable(
     completedAt: timestamp("completed_at", { withTimezone: true }),
     ...timestamps
   },
-  (table) => [index("intake_workflows_owner_status_idx").on(table.ownerUserId, table.status)]
+  (table) => [
+    index("intake_workflows_owner_status_idx").on(table.ownerUserId, table.status),
+    uniqueIndex("intake_workflows_one_active_per_owner")
+      .on(table.ownerUserId)
+      .where(sql`${table.status} = 'in_progress'`)
+  ]
 );
 
 export const intakeAnswers = pgTable(

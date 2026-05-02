@@ -8,6 +8,7 @@
     "./jobs": "./src/jobs.ts",
     "./sharing": "./src/sharing.ts",
     "./canonical": "./src/canonical.ts",
+    "./intake": "./src/intake.ts",
     "./reviews": "./src/reviews.ts"
   },
   "scripts": {

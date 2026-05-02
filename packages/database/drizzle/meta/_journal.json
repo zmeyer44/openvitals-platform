@@ -36,6 +36,13 @@
       "when": 1777641703423,
       "tag": "0004_eminent_mantis",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1777662525942,
+      "tag": "0005_long_madelyne_pryor",
+      "breakpoints": true
     }
   ]
 }
