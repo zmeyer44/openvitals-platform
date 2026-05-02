@@ -23,8 +23,29 @@ import {
   type OpenVitalsDatabase
 } from "@openvitals/database";
 import { buildSourceDocumentObjectKey, sha256Hex } from "@openvitals/domain";
-import { createLocalObjectStore } from "@openvitals/ingestion";
+import {
+  createLocalObjectStore,
+  createObjectStoreFromEnv,
+  createObjectStoreResolverFromEnv,
+  type ObjectStore,
+  type ObjectStoreResolver
+} from "@openvitals/ingestion";
 import type { AuthenticatedOwnerContext } from "./ownership";
+
+function resolveWriteObjectStore(objectStorageRoot: string | undefined): ObjectStore {
+  if (objectStorageRoot) {
+    return createLocalObjectStore(objectStorageRoot);
+  }
+  return createObjectStoreFromEnv();
+}
+
+function resolveReadObjectStoreResolver(objectStorageRoot: string | undefined): ObjectStoreResolver {
+  if (objectStorageRoot) {
+    const localStore = createLocalObjectStore(objectStorageRoot);
+    return () => localStore;
+  }
+  return createObjectStoreResolverFromEnv();
+}
 
 export type CreateImportInput = {
   owner: Pick<AuthenticatedOwnerContext, "ownerUserId" | "actor">;
@@ -185,9 +206,7 @@ export async function createImport(
     sha256,
     fileName: input.fileName
   });
-  const objectStore = createLocalObjectStore(
-    input.objectStorageRoot ?? process.env.OPENVITALS_OBJECT_STORAGE_ROOT ?? ".data/blobs"
-  );
+  const objectStore = resolveWriteObjectStore(input.objectStorageRoot);
 
   await objectStore.write(objectKey, bytes);
 
@@ -215,6 +234,7 @@ export async function createImport(
         .values({
           ownerUserId,
           objectKey,
+          storageProvider: objectStore.provider,
           sha256,
           mimeType: input.mimeType,
           byteSize: bytes.length
@@ -222,6 +242,7 @@ export async function createImport(
         .onConflictDoUpdate({
           target: blobObjects.objectKey,
           set: {
+            storageProvider: objectStore.provider,
             mimeType: input.mimeType,
             byteSize: bytes.length,
             updatedAt: new Date()
@@ -512,9 +533,9 @@ export async function getImportDocumentBlob(
     return null;
   }
 
-  const objectStore = createLocalObjectStore(
-    input.objectStorageRoot ?? process.env.OPENVITALS_OBJECT_STORAGE_ROOT ?? ".data/blobs"
-  );
+  const objectStore = resolveReadObjectStoreResolver(input.objectStorageRoot)({
+    storageProvider: row.blob.storageProvider
+  });
 
   return {
     bytes: await objectStore.read(row.blob.objectKey),
