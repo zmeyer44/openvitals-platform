@@ -1,6 +1,7 @@
 import { and, eq } from "drizzle-orm";
 import {
   conditions,
+  deleteIntakeAnswersByKeys,
   deleteIntakeAnswersForStep,
   findActiveIntakeWorkflow,
   getIntakeWorkflowById,
@@ -160,6 +161,7 @@ async function ensureIntakeSourceDocument(
   ownerUserId: string,
   workflowId: string
 ): Promise<typeof sourceDocuments.$inferSelect> {
+  const fileName = intakeDocumentName(workflowId);
   const [existing] = await db
     .select()
     .from(sourceDocuments)
@@ -167,7 +169,7 @@ async function ensureIntakeSourceDocument(
       and(
         eq(sourceDocuments.ownerUserId, ownerUserId),
         eq(sourceDocuments.sourceKind, "manual_intake"),
-        eq(sourceDocuments.fileName, intakeDocumentName(workflowId))
+        eq(sourceDocuments.fileName, fileName)
       )
     )
     .limit(1);
@@ -181,7 +183,7 @@ async function ensureIntakeSourceDocument(
     .values({
       ownerUserId,
       sourceKind: "manual_intake",
-      fileName: intakeDocumentName(workflowId),
+      fileName,
       mimeType: "application/vnd.openvitals.intake+json",
       status: "normalized",
       classification: "manual_intake",
@@ -211,7 +213,16 @@ async function requireOpenWorkflow(
   ownerUserId: string,
   workflowId: string
 ): Promise<RequiredWorkflowResult> {
-  const workflow = await getIntakeWorkflowById(db, { ownerUserId, workflowId });
+  // Lock the workflow row so concurrent step saves serialize on this owner's
+  // active intake. Without this, ensureIntakeSourceDocument's SELECT-then-INSERT
+  // races and can hit the partial unique index on source_documents.
+  const [workflow] = await db
+    .select()
+    .from(intakeWorkflows)
+    .where(and(eq(intakeWorkflows.ownerUserId, ownerUserId), eq(intakeWorkflows.id, workflowId)))
+    .for("update")
+    .limit(1);
+
   if (!workflow) {
     throw new IntakeApiError(404, "intake_not_found", "Intake workflow not found.");
   }
@@ -1227,6 +1238,21 @@ export async function saveIntakeStep(
     });
     const existingByKey = new Map(existingAnswers.map((answer) => [answer.answerKey, answer]));
 
+    const submittedKeys = new Set(input.body.answers.map((answer) => answer.answerKey));
+    const droppedAnswers = existingAnswers.filter((answer) => !submittedKeys.has(answer.answerKey));
+
+    for (const dropped of droppedAnswers) {
+      await supersedeIntakeAnswerResource(tx, context, dropped, "removed_from_intake_step");
+    }
+    if (droppedAnswers.length > 0) {
+      await deleteIntakeAnswersByKeys(tx, {
+        ownerUserId: input.owner.ownerUserId,
+        workflowId: workflow.id,
+        stepKey,
+        answerKeys: droppedAnswers.map((answer) => answer.answerKey)
+      });
+    }
+
     const materializedAnswerIds: string[] = [];
     for (const answer of input.body.answers) {
       const materialized = await materializeAnswer(tx, context, answer, existingByKey.get(answer.answerKey));
@@ -1386,10 +1412,19 @@ export async function completeIntake(
   }
 ): Promise<IntakeWorkflowDetail> {
   return database.transaction(async (tx) => {
-    const workflow = await getIntakeWorkflowById(tx, {
-      ownerUserId: input.owner.ownerUserId,
-      workflowId: input.intakeId
-    });
+    // Match saveIntakeStep / skipIntakeStep concurrency: lock the workflow row
+    // so racing complete calls observe a consistent status.
+    const [workflow] = await tx
+      .select()
+      .from(intakeWorkflows)
+      .where(
+        and(
+          eq(intakeWorkflows.ownerUserId, input.owner.ownerUserId),
+          eq(intakeWorkflows.id, input.intakeId)
+        )
+      )
+      .for("update")
+      .limit(1);
 
     if (!workflow) {
       throw new IntakeApiError(404, "intake_not_found", "Intake workflow not found.");

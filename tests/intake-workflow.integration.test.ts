@@ -474,6 +474,87 @@ describeWithDatabase("intake workflow backend integration", () => {
     expect((revisions[0]?.newValue as { clinicalStatus?: string }).clinicalStatus).toBe("resolved");
   });
 
+  it("supersedes canonical resources for answer keys dropped from the next save", async () => {
+    const owner = await createOwner();
+    const { startOrResumeIntake, saveIntakeStep } = await import(
+      "../apps/web/src/server/intake"
+    );
+
+    const { workflow } = await startOrResumeIntake(db, { owner });
+
+    await saveIntakeStep(db, {
+      owner,
+      intakeId: workflow.id,
+      body: {
+        stepKey: "conditions",
+        answers: [
+          {
+            answerKey: "primary",
+            payload: { kind: "condition", displayName: "Asthma", clinicalStatus: "active" }
+          },
+          {
+            answerKey: "secondary",
+            payload: { kind: "condition", displayName: "Hypertension", clinicalStatus: "active" }
+          }
+        ]
+      }
+    });
+
+    const beforeRows = await db
+      .select()
+      .from(conditions)
+      .where(eq(conditions.ownerUserId, owner.ownerUserId));
+    expect(beforeRows).toHaveLength(2);
+    const dropped = beforeRows.find((row) => row.displayName === "Hypertension");
+    expect(dropped?.reviewState).toBe("confirmed");
+
+    await saveIntakeStep(db, {
+      owner,
+      intakeId: workflow.id,
+      body: {
+        stepKey: "conditions",
+        answers: [
+          {
+            answerKey: "primary",
+            payload: { kind: "condition", displayName: "Asthma", clinicalStatus: "active" }
+          }
+        ],
+        advanceTo: null
+      }
+    });
+
+    const afterRows = await db
+      .select()
+      .from(conditions)
+      .where(eq(conditions.ownerUserId, owner.ownerUserId));
+    expect(afterRows).toHaveLength(2);
+    const stillKept = afterRows.find((row) => row.displayName === "Asthma");
+    const nowSuperseded = afterRows.find((row) => row.id === dropped?.id);
+    expect(stillKept?.reviewState).toBe("confirmed");
+    expect(nowSuperseded?.reviewState).toBe("ignored");
+    expect((nowSuperseded?.metadata as { lastIntakeSupersededReason?: string })?.lastIntakeSupersededReason).toBe(
+      "removed_from_intake_step"
+    );
+
+    const remainingAnswers = await db
+      .select()
+      .from(intakeAnswers)
+      .where(
+        and(
+          eq(intakeAnswers.workflowId, workflow.id),
+          eq(intakeAnswers.stepKey, "conditions")
+        )
+      );
+    expect(remainingAnswers.map((row) => row.answerKey).sort()).toEqual(["primary"]);
+
+    const supersedeRevision = await db
+      .select()
+      .from(recordRevisions)
+      .where(eq(recordRevisions.resourceId, dropped!.id));
+    expect(supersedeRevision).toHaveLength(1);
+    expect(supersedeRevision[0]?.reason).toBe("removed_from_intake_step");
+  });
+
   it("records skipped steps without writing canonical records and emits a skip event", async () => {
     const owner = await createOwner();
     const { startOrResumeIntake, skipIntakeStep } = await import(

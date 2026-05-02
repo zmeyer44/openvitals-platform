@@ -546,6 +546,19 @@ describeWithDatabase("OpenVitals foundation database integration", () => {
       .limit(1);
     expect(shareOutbox?.actorId).toBe(recipient.id);
 
+    const outsiderDeniedAudits = await db
+      .select()
+      .from(auditEvents)
+      .where(
+        and(
+          eq(auditEvents.action, "share.access_denied"),
+          eq(auditEvents.resourceId, policy.id),
+          eq(auditEvents.actorId, outsider.id)
+        )
+      );
+    expect(outsiderDeniedAudits).toHaveLength(1);
+    expect(outsiderDeniedAudits[0]?.ownerUserId).toBe(owner.id);
+
     await db.update(sharePolicies).set({ status: "revoked" }).where(eq(sharePolicies.id, policy.id));
 
     const revokedRows = await listSharedObservations(db, {
@@ -556,6 +569,18 @@ describeWithDatabase("OpenVitals foundation database integration", () => {
     });
 
     expect(revokedRows).toHaveLength(0);
+
+    const revokedDeniedAudits = await db
+      .select()
+      .from(auditEvents)
+      .where(
+        and(
+          eq(auditEvents.action, "share.access_denied"),
+          eq(auditEvents.resourceId, policy.id),
+          eq(auditEvents.actorId, recipient.id)
+        )
+      );
+    expect(revokedDeniedAudits).toHaveLength(1);
   });
 
   it("creates, reads, and revokes authenticated-recipient share policies through the server API layer", async () => {
@@ -641,6 +666,7 @@ describeWithDatabase("OpenVitals foundation database integration", () => {
       .from(outboxEvents)
       .where(eq(outboxEvents.aggregateId, created.policy.id));
     expect(shareEvents.map((event) => event.eventType).sort()).toEqual([
+      "share.access_denied",
       "share.accessed",
       "share.created",
       "share.revoked"

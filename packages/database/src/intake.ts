@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, sql, type SQL } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, sql, type SQL } from "drizzle-orm";
 import type { OpenVitalsDbExecutor } from "./client";
 import {
   intakeAnswers,
@@ -205,6 +205,25 @@ export async function deleteIntakeAnswersForStep(
         eq(intakeAnswers.ownerUserId, input.ownerUserId),
         eq(intakeAnswers.workflowId, input.workflowId),
         eq(intakeAnswers.stepKey, input.stepKey)
+      )
+    );
+}
+
+export async function deleteIntakeAnswersByKeys(
+  db: OpenVitalsDbExecutor,
+  input: { ownerUserId: string; workflowId: string; stepKey: string; answerKeys: string[] }
+): Promise<void> {
+  if (input.answerKeys.length === 0) {
+    return;
+  }
+  await db
+    .delete(intakeAnswers)
+    .where(
+      and(
+        eq(intakeAnswers.ownerUserId, input.ownerUserId),
+        eq(intakeAnswers.workflowId, input.workflowId),
+        eq(intakeAnswers.stepKey, input.stepKey),
+        inArray(intakeAnswers.answerKey, input.answerKeys)
       )
     );
 }

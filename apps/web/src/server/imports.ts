@@ -289,6 +289,12 @@ async function safeDeleteObject(objectStore: { delete(objectKey: string): Promis
   }
 }
 
+// Best-effort cleanup after a failed createImport: only deletes the blob if no
+// committed row references it. There is a residual TOCTOU window — a concurrent
+// import that wrote the same sha256 key could commit between our SELECT and the
+// FS delete, leaving its row pointing at a missing file. The local filestore
+// accepts that risk; production object storage should switch to refcounting or
+// an async unreferenced-blob reaper.
 async function safeDeleteUnreferencedObject(
   db: OpenVitalsDatabase,
   objectStore: { delete(objectKey: string): Promise<void> },

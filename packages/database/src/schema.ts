@@ -315,7 +315,10 @@ export const sourceDocuments = pgTable(
   },
   (table) => [
     index("source_documents_owner_status_idx").on(table.ownerUserId, table.status),
-    index("source_documents_blob_idx").on(table.blobObjectId)
+    index("source_documents_blob_idx").on(table.blobObjectId),
+    uniqueIndex("source_documents_manual_intake_file_unique")
+      .on(table.ownerUserId, table.fileName)
+      .where(sql`${table.sourceKind} = 'manual_intake'`)
   ]
 );
 
